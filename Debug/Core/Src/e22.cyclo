@@ -1,0 +1,7 @@
+../Core/Src/e22.c:11:6:E22_Init	1
+../Core/Src/e22.c:20:19:E22_Send	1
+../Core/Src/e22.c:24:19:E22_SendString	1
+../Core/Src/e22.c:28:6:E22_RxCallback	2
+../Core/Src/e22.c:40:10:E22_Available	2
+../Core/Src/e22.c:48:9:E22_ReadByte	2
+../Core/Src/e22.c:60:10:E22_Read	3

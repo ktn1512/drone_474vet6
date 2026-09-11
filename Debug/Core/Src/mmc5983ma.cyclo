@@ -1,0 +1,6 @@
+../Core/Src/mmc5983ma.c:19:26:write_reg	1
+../Core/Src/mmc5983ma.c:24:26:read_reg	1
+../Core/Src/mmc5983ma.c:30:9:MMC5983_WhoAmI	1
+../Core/Src/mmc5983ma.c:39:19:MMC5983_Init	2
+../Core/Src/mmc5983ma.c:54:19:MMC5983_ReadRaw	6
+../Core/Src/mmc5983ma.c:104:19:MMC5983_ReadMag	2
