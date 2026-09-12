@@ -109,13 +109,13 @@ ICM42670_Status_t ICM42670_Init(ICM42670_t *dev)
     if (status != ICM42670_OK)
         return status;
 
-    /* Gyro LPF: ~53 Hz */
-    status = ICM42670_WriteReg(ICM_GYRO_CONFIG1, 0x34U);
+    /* Gyro UI LPF: 53 Hz. Reserved bits remain 0. */
+    status = ICM42670_WriteReg(ICM_GYRO_CONFIG1, 0x04U);
     if (status != ICM42670_OK)
         return status;
 
-    /* Accel LPF: ~53 Hz */
-    status = ICM42670_WriteReg(ICM_ACCEL_CONFIG1, 0x44U);
+    /* Accel UI LPF: 53 Hz, 2x averaging. Reserved bits remain 0. */
+    status = ICM42670_WriteReg(ICM_ACCEL_CONFIG1, 0x04U);
     if (status != ICM42670_OK)
         return status;
 
@@ -140,7 +140,7 @@ ICM42670_Status_t ICM42670_ReadRaw(ICM42670_Data_t *imu)
     if (status != ICM42670_OK)
         return status;
 
-    /* TEMP[15:8], TEMP[7:0], ACCEL XYZ, GYRO XYZ */
+    /* TEMP, ACCEL XYZ, GYRO XYZ are contiguous from 0x09 to 0x16. */
     imu->temp_raw = MakeInt16(buf[0], buf[1]);
     imu->ax_raw = MakeInt16(buf[2], buf[3]);
     imu->ay_raw = MakeInt16(buf[4], buf[5]);
