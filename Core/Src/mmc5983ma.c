@@ -23,9 +23,9 @@
 #define CTRL0_SET           0x08U
 #define CTRL0_RESET         0x10U
 
-#define MMC5983_I2C_TIMEOUT_MS 100U
+#define MMC5983_I2C_TIMEOUT_MS  100U
 #define MMC5983_MEAS_TIMEOUT_MS 10U
-#define MMC5983_POLL_DELAY_MS 1U
+#define MMC5983_POLL_DELAY_MS   1U
 
 static HAL_StatusTypeDef WriteReg(MMC5983MA_t *dev, uint8_t reg, uint8_t data)
 {
@@ -73,7 +73,6 @@ HAL_StatusTypeDef MMC5983_Init(MMC5983MA_t *dev)
     if ((dev == NULL) || (dev->hi2c == NULL))
         return HAL_ERROR;
 
-    dev->initialized = 0U;
     dev->raw_x = 0;
     dev->raw_y = 0;
     dev->raw_z = 0;
@@ -103,7 +102,6 @@ HAL_StatusTypeDef MMC5983_Init(MMC5983MA_t *dev)
     if (WriteReg(dev, REG_CONTROL2, 0x00U) != HAL_OK)
         return HAL_ERROR;
 
-    dev->initialized = 1U;
     return HAL_OK;
 }
 
