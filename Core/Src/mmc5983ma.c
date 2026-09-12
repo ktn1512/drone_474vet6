@@ -1,325 +1,193 @@
 /*
  * mmc5983ma.c
- *
- *  Created on: 22 thg 8, 2026
- *      Author: khanh
+ * MMC5983MA magnetometer driver
  */
 
 #include "mmc5983ma.h"
 
-/* =========================
- * Thanh ghi MMC5983MA
- * ========================= */
+#define REG_XOUT0       0x00U
+#define REG_XOUT1       0x01U
+#define REG_YOUT0       0x02U
+#define REG_YOUT1       0x03U
+#define REG_ZOUT0       0x04U
+#define REG_ZOUT1       0x05U
+#define REG_XYZOUT2     0x06U
+#define REG_STATUS      0x08U
+#define REG_CONTROL0    0x09U
+#define REG_CONTROL1    0x0AU
+#define REG_CONTROL2    0x0BU
+#define REG_PRODUCTID   0x2FU
 
-#define REG_XOUT0 0x00 // X[17:10]
-#define REG_XOUT1 0x01 // X[9:2]
+#define STATUS_MEAS_M_DONE  0x01U
+#define CTRL0_TM_M          0x01U
+#define CTRL0_SET           0x08U
+#define CTRL0_RESET         0x10U
 
-#define REG_YOUT0 0x02 // Y[17:10]
-#define REG_YOUT1 0x03 // Y[9:2]
+#define MMC5983_I2C_TIMEOUT_MS 100U
+#define MMC5983_MEAS_TIMEOUT_MS 10U
+#define MMC5983_POLL_DELAY_MS 1U
 
-#define REG_ZOUT0 0x04 // Z[17:10]
-#define REG_ZOUT1 0x05 // Z[9:2]
-
-#define REG_XYZOUT2 0x06 // 2 bit cuối của X,Y,Z
-
-#define REG_STATUS 0x08 // Trạng thái đo
-
-#define REG_CONTROL0 0x09 // Control 0
-#define REG_CONTROL1 0x0A // Control 1
-#define REG_CONTROL2 0x0B // Control 2
-
-#define REG_PRODUCTID 0x2F // Product ID
-
-/* Bit STATUS */
-#define STATUS_MEAS_M_DONE 0x01
-
-/* Bit CONTROL0 */
-#define CTRL0_TM_M 0x01	 // Bắt đầu đo từ trường
-#define CTRL0_SET 0x08	 // SET
-#define CTRL0_RESET 0x10 // RESET
-
-/* =========================================================
- * Ghi 1 byte vào thanh ghi
- *
- * dev  : cảm biến
- * reg  : địa chỉ thanh ghi
- * data : dữ liệu cần ghi
- * ========================================================= */
-static HAL_StatusTypeDef WriteReg(
-	MMC5983MA_t *dev,
-	uint8_t reg,
-	uint8_t data)
+static HAL_StatusTypeDef WriteReg(MMC5983MA_t *dev, uint8_t reg, uint8_t data)
 {
-	return HAL_I2C_Mem_Write(
-		dev->hi2c,
-		MMC5983_I2C_ADDR,
-		reg,
-		I2C_MEMADD_SIZE_8BIT,
-		&data,
-		1,
-		100);
+    if ((dev == NULL) || (dev->hi2c == NULL))
+        return HAL_ERROR;
+
+    return HAL_I2C_Mem_Write(dev->hi2c,
+                             MMC5983_I2C_ADDR,
+                             reg,
+                             I2C_MEMADD_SIZE_8BIT,
+                             &data,
+                             1U,
+                             MMC5983_I2C_TIMEOUT_MS);
 }
 
-/* =========================================================
- * Đọc nhiều byte từ thanh ghi
- *
- * dev  : cảm biến
- * reg  : thanh ghi bắt đầu đọc
- * data : buffer chứa dữ liệu đọc được
- * len  : số byte cần đọc
- * ========================================================= */
-static HAL_StatusTypeDef ReadReg(
-	MMC5983MA_t *dev,
-	uint8_t reg,
-	uint8_t *data,
-	uint16_t len)
+static HAL_StatusTypeDef ReadReg(MMC5983MA_t *dev,
+                                 uint8_t reg,
+                                 uint8_t *data,
+                                 uint16_t len)
 {
-	return HAL_I2C_Mem_Read(
-		dev->hi2c,
-		MMC5983_I2C_ADDR,
-		reg,
-		I2C_MEMADD_SIZE_8BIT,
-		data,
-		len,
-		100);
+    if ((dev == NULL) || (dev->hi2c == NULL) || (data == NULL) || (len == 0U))
+        return HAL_ERROR;
+
+    return HAL_I2C_Mem_Read(dev->hi2c,
+                            MMC5983_I2C_ADDR,
+                            reg,
+                            I2C_MEMADD_SIZE_8BIT,
+                            data,
+                            len,
+                            MMC5983_I2C_TIMEOUT_MS);
 }
 
-/* =========================================================
- * Đọc Product ID
- *
- * dev : cảm biến
- *
- * Trả về 0x30 nếu đúng MMC5983MA
- * ========================================================= */
 uint8_t MMC5983_WhoAmI(MMC5983MA_t *dev)
 {
-	uint8_t id = 0;
+    uint8_t id = 0U;
 
-	ReadReg(
-		dev,
-		REG_PRODUCTID,
-		&id,
-		1);
+    if (ReadReg(dev, REG_PRODUCTID, &id, 1U) != HAL_OK)
+        return 0U;
 
-	return id;
+    return id;
 }
 
-/* =========================================================
- * Khởi tạo MMC5983MA
- *
- * dev : con trỏ tới cảm biến
- *
- * Kiểm tra ID và cấu hình cơ bản.
- * ========================================================= */
 HAL_StatusTypeDef MMC5983_Init(MMC5983MA_t *dev)
 {
-	/* Kiểm tra Product ID */
-	if (MMC5983_WhoAmI(dev) != MMC5983_WHOAMI)
-	{
-		return HAL_ERROR;
-	}
+    if ((dev == NULL) || (dev->hi2c == NULL))
+        return HAL_ERROR;
 
-	HAL_Delay(10);
+    dev->initialized = 0U;
+    dev->raw_x = 0;
+    dev->raw_y = 0;
+    dev->raw_z = 0;
+    dev->mag_x = 0.0f;
+    dev->mag_y = 0.0f;
+    dev->mag_z = 0.0f;
 
-	/* RESET từ kế */
-	if (WriteReg(
-			dev,
-			REG_CONTROL0,
-			CTRL0_RESET) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+    uint8_t id = MMC5983_WhoAmI(dev);
+    if (id != MMC5983_WHOAMI)
+        return HAL_ERROR;
 
-	HAL_Delay(1);
+    HAL_Delay(1U);
 
-	/* SET từ kế */
-	if (WriteReg(
-			dev,
-			REG_CONTROL0,
-			CTRL0_SET) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+    if (WriteReg(dev, REG_CONTROL0, CTRL0_RESET) != HAL_OK)
+        return HAL_ERROR;
 
-	HAL_Delay(1);
+    HAL_Delay(1U);
 
-	/* Control1 = 0
-	 * Không dùng continuous mode */
-	if (WriteReg(
-			dev,
-			REG_CONTROL1,
-			0x00) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+    if (WriteReg(dev, REG_CONTROL0, CTRL0_SET) != HAL_OK)
+        return HAL_ERROR;
 
-	/* Control2 = 0
-	 * Đọc từng lần bằng TM_M */
-	if (WriteReg(
-			dev,
-			REG_CONTROL2,
-			0x00) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+    HAL_Delay(1U);
 
-	return HAL_OK;
+    if (WriteReg(dev, REG_CONTROL1, 0x00U) != HAL_OK)
+        return HAL_ERROR;
+
+    if (WriteReg(dev, REG_CONTROL2, 0x00U) != HAL_OK)
+        return HAL_ERROR;
+
+    dev->initialized = 1U;
+    return HAL_OK;
 }
 
-/* =========================================================
- * Đọc dữ liệu raw X/Y/Z
- *
- * dev : cảm biến
- * x   : lưu raw X
- * y   : lưu raw Y
- * z   : lưu raw Z
- *
- * Trả về:
- * HAL_OK      : đọc thành công
- * HAL_ERROR   : lỗi I2C
- * HAL_TIMEOUT : cảm biến không hoàn thành phép đo
- * ========================================================= */
-HAL_StatusTypeDef MMC5983_ReadRaw(
-	MMC5983MA_t *dev,
-	int32_t *x,
-	int32_t *y,
-	int32_t *z)
+HAL_StatusTypeDef MMC5983_ReadRaw(MMC5983MA_t *dev,
+                                  int32_t *x,
+                                  int32_t *y,
+                                  int32_t *z)
 {
-	uint8_t status;
-	uint8_t buf[7];
+    if ((dev == NULL) || (dev->hi2c == NULL) ||
+        (x == NULL) || (y == NULL) || (z == NULL))
+        return HAL_ERROR;
 
-	/* Bắt đầu một phép đo */
-	if (WriteReg(
-			dev,
-			REG_CONTROL0,
-			CTRL0_TM_M) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+    uint8_t status = 0U;
+    uint8_t buf[7] = {0U};
 
-	/* Chờ đo xong */
-	uint32_t start = HAL_GetTick();
+    if (WriteReg(dev, REG_CONTROL0, CTRL0_TM_M) != HAL_OK)
+        return HAL_ERROR;
 
-	do
-	{
-		if (ReadReg(
-				dev,
-				REG_STATUS,
-				&status,
-				1) != HAL_OK)
-		{
-			return HAL_ERROR;
-		}
+    uint32_t start = HAL_GetTick();
 
-		/* Timeout 10 ms */
-		if ((HAL_GetTick() - start) > 10)
-		{
-			return HAL_TIMEOUT;
-		}
+    do
+    {
+        if (ReadReg(dev, REG_STATUS, &status, 1U) != HAL_OK)
+            return HAL_ERROR;
 
-	} while ((status & STATUS_MEAS_M_DONE) == 0);
+        if ((status & STATUS_MEAS_M_DONE) != 0U)
+            break;
 
-	/* Đọc X, Y, Z và byte 2-bit cuối */
-	if (ReadReg(
-			dev,
-			REG_XOUT0,
-			buf,
-			7) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+        HAL_Delay(MMC5983_POLL_DELAY_MS);
 
-	/*
-	 * Ghép X 18-bit
-	 *
-	 * X = XOUT0[7:0]
-	 *     XOUT1[7:0]
-	 *     XYZOUT2[7:6]
-	 */
-	uint32_t raw_x =
-		((uint32_t)buf[0] << 10) |
-		((uint32_t)buf[1] << 2) |
-		((buf[6] >> 6) & 0x03);
+    } while ((HAL_GetTick() - start) <= MMC5983_MEAS_TIMEOUT_MS);
 
-	/*
-	 * Ghép Y 18-bit
-	 *
-	 * Y = YOUT0[7:0]
-	 *     YOUT1[7:0]
-	 *     XYZOUT2[5:4]
-	 */
-	uint32_t raw_y =
-		((uint32_t)buf[2] << 10) |
-		((uint32_t)buf[3] << 2) |
-		((buf[6] >> 4) & 0x03);
+    if ((status & STATUS_MEAS_M_DONE) == 0U)
+        return HAL_TIMEOUT;
 
-	/*
-	 * Ghép Z 18-bit
-	 *
-	 * Z = ZOUT0[7:0]
-	 *     ZOUT1[7:0]
-	 *     XYZOUT2[3:2]
-	 */
-	uint32_t raw_z =
-		((uint32_t)buf[4] << 10) |
-		((uint32_t)buf[5] << 2) |
-		((buf[6] >> 2) & 0x03);
+    if (ReadReg(dev, REG_XOUT0, buf, sizeof(buf)) != HAL_OK)
+        return HAL_ERROR;
 
-	/* Trả dữ liệu cho chương trình */
-	*x = (int32_t)raw_x;
-	*y = (int32_t)raw_y;
-	*z = (int32_t)raw_z;
+    uint32_t raw_x = ((uint32_t)buf[0] << 10) |
+                     ((uint32_t)buf[1] << 2) |
+                     ((buf[6] >> 6) & 0x03U);
 
-	/* Đồng thời lưu vào struct */
-	dev->raw_x = *x;
-	dev->raw_y = *y;
-	dev->raw_z = *z;
+    uint32_t raw_y = ((uint32_t)buf[2] << 10) |
+                     ((uint32_t)buf[3] << 2) |
+                     ((buf[6] >> 4) & 0x03U);
 
-	return HAL_OK;
+    uint32_t raw_z = ((uint32_t)buf[4] << 10) |
+                     ((uint32_t)buf[5] << 2) |
+                     ((buf[6] >> 2) & 0x03U);
+
+    *x = (int32_t)raw_x;
+    *y = (int32_t)raw_y;
+    *z = (int32_t)raw_z;
+
+    dev->raw_x = *x;
+    dev->raw_y = *y;
+    dev->raw_z = *z;
+
+    return HAL_OK;
 }
 
-/* =========================================================
- * Đọc từ trường và đổi sang Gauss
- *
- * dev : cảm biến
- * x   : lưu từ trường X (Gauss)
- * y   : lưu từ trường Y (Gauss)
- * z   : lưu từ trường Z (Gauss)
- * ========================================================= */
-HAL_StatusTypeDef MMC5983_ReadMag(
-	MMC5983MA_t *dev,
-	float *x,
-	float *y,
-	float *z)
+HAL_StatusTypeDef MMC5983_ReadMag(MMC5983MA_t *dev,
+                                  float *x,
+                                  float *y,
+                                  float *z)
 {
-	int32_t raw_x;
-	int32_t raw_y;
-	int32_t raw_z;
+    if ((dev == NULL) || (x == NULL) || (y == NULL) || (z == NULL))
+        return HAL_ERROR;
 
-	/* Đọc dữ liệu raw */
-	if (MMC5983_ReadRaw(
-			dev,
-			&raw_x,
-			&raw_y,
-			&raw_z) != HAL_OK)
-	{
-		return HAL_ERROR;
-	}
+    int32_t raw_x;
+    int32_t raw_y;
+    int32_t raw_z;
 
-	/*
-	 * MMC5983MA:
-	 *
-	 * Zero-field = 131072
-	 * Sensitivity = 16384 counts/Gauss
-	 */
-	*x = ((float)raw_x - 131072.0f) / 16384.0f;
-	*y = ((float)raw_y - 131072.0f) / 16384.0f;
-	*z = ((float)raw_z - 131072.0f) / 16384.0f;
+    HAL_StatusTypeDef status = MMC5983_ReadRaw(dev, &raw_x, &raw_y, &raw_z);
+    if (status != HAL_OK)
+        return status;
 
-	/* Lưu vào struct */
-	dev->mag_x = *x;
-	dev->mag_y = *y;
-	dev->mag_z = *z;
+    *x = ((float)raw_x - 131072.0f) / 16384.0f;
+    *y = ((float)raw_y - 131072.0f) / 16384.0f;
+    *z = ((float)raw_z - 131072.0f) / 16384.0f;
 
-	return HAL_OK;
+    dev->mag_x = *x;
+    dev->mag_y = *y;
+    dev->mag_z = *z;
+
+    return HAL_OK;
 }
