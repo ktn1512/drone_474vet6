@@ -1,0 +1,4 @@
+../Core/Src/mahony.c:11:14:invSqrt	16	static
+../Core/Src/mahony.c:15:6:Mahony_Init	16	static
+../Core/Src/mahony.c:29:6:Mahony_Update	80	static
+../Core/Src/mahony.c:102:6:Mahony_GetEuler	24	static

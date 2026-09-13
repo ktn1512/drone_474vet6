@@ -1,0 +1,2 @@
+../Core/Src/rate_controller.c:10:6:RateController_Init	1
+../Core/Src/rate_controller.c:18:6:RateController_Update	1

@@ -1,0 +1,2 @@
+../Core/Src/angle_controller.c:10:6:AngleController_Init	16	static
+../Core/Src/angle_controller.c:16:6:AngleController_Update	40	static

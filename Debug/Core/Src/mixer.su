@@ -1,0 +1,2 @@
+../Core/Src/mixer.c:10:17:LimitMotor	16	static
+../Core/Src/mixer.c:20:6:Mixer_QuadX	48	static

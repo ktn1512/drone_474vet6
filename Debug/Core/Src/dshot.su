@@ -1,0 +1,6 @@
+../Core/Src/dshot.c:36:17:DSHOT_MakePacket	24	static
+../Core/Src/dshot.c:58:13:DSHOT_FillBuffer	24	static
+../Core/Src/dshot.c:72:17:PWM_To_DShot	16	static
+../Core/Src/dshot.c:82:6:DSHOT_Init	8	static
+../Core/Src/dshot.c:93:6:DSHOT_Write	32	static
+../Core/Src/dshot.c:144:6:HAL_TIM_PWM_PulseFinishedCallback	16	static
