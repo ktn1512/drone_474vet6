@@ -25,6 +25,13 @@ typedef struct {
 
 void Mahony_Init(Mahony_t *mahony);
 
+/* Initialize tilt from stationary accelerometer data; yaw starts at zero.
+ * Sensor axes must match the gyro axes, with +Z reading +1 g when level.
+ * Returns 1 on success, 0 for invalid acceleration (state unchanged).
+ */
+int Mahony_InitFromAccel(Mahony_t *mahony, float ax, float ay, float az);
+
+/* Gyroscope inputs: degrees/s; accelerometer inputs: g; dt: seconds. */
 void Mahony_Update(Mahony_t *mahony,
 
 float gx, float gy, float gz,

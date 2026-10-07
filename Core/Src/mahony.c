@@ -26,6 +26,28 @@ void Mahony_Init(Mahony_t *m) {
 	m->integralFBz = 0;
 }
 
+int Mahony_InitFromAccel(Mahony_t *m, float ax, float ay, float az) {
+	float normSq = ax * ax + ay * ay + az * az;
+	if (!isfinite(normSq) || normSq < 1.0e-6f) {
+		return 0;
+	}
+
+	float roll = atan2f(ay, az);
+	float pitch = atan2f(-ax, sqrtf(ay * ay + az * az));
+	float cr = cosf(0.5f * roll);
+	float sr = sinf(0.5f * roll);
+	float cp = cosf(0.5f * pitch);
+	float sp = sinf(0.5f * pitch);
+
+	Mahony_Init(m);
+	/* Euler roll/pitch, yaw = 0, using the same convention as GetEuler. */
+	m->q0 = cr * cp;
+	m->q1 = sr * cp;
+	m->q2 = cr * sp;
+	m->q3 = -sr * sp;
+	return 1;
+}
+
 void Mahony_Update(Mahony_t *m,
 
 float gx, float gy, float gz,
@@ -46,6 +68,11 @@ float dt) {
 	float qa;
 	float qb;
 	float qc;
+
+	/* Feedback is in radians/s: convert gyro before adding feedback. */
+	gx *= 0.0174533f;
+	gy *= 0.0174533f;
+	gz *= 0.0174533f;
 
 	if ((ax != 0.0f) || (ay != 0.0f) || (az != 0.0f)) {
 		recipNorm = invSqrt(ax * ax + ay * ay + az * az);
@@ -77,9 +104,9 @@ float dt) {
 		gz += m->twoKp * halfez;
 	}
 
-	gx *= 0.5f * dt * 0.0174533f;
-	gy *= 0.5f * dt * 0.0174533f;
-	gz *= 0.5f * dt * 0.0174533f;
+	gx *= 0.5f * dt;
+	gy *= 0.5f * dt;
+	gz *= 0.5f * dt;
 
 	qa = m->q0;
 	qb = m->q1;
@@ -105,7 +132,10 @@ float *roll, float *pitch, float *yaw) {
 	*roll = atan2f(2.0f * (m->q0 * m->q1 + m->q2 * m->q3),
 			1.0f - 2.0f * (m->q1 * m->q1 + m->q2 * m->q2)) * 57.29578f;
 
-	*pitch = asinf(2.0f * (m->q0 * m->q2 - m->q3 * m->q1)) * 57.29578f;
+	/* Rounding can put sin(pitch) slightly outside [-1, 1] near 90 deg. */
+	float sinPitch = 2.0f * (m->q0 * m->q2 - m->q3 * m->q1);
+	sinPitch = fmaxf(-1.0f, fminf(1.0f, sinPitch));
+	*pitch = asinf(sinPitch) * 57.29578f;
 
 	*yaw = atan2f(2.0f * (m->q0 * m->q3 + m->q1 * m->q2),
 			1.0f - 2.0f * (m->q2 * m->q2 + m->q3 * m->q3)) * 57.29578f;

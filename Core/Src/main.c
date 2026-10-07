@@ -182,12 +182,8 @@ int main(void) {
 	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 1000);
 	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 1000);
 
-	HAL_Delay(1000);
+	HAL_Delay(4000);
 
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 1300);
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 1500);
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 1800);
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 2000);
 	// E22_Init(&lora, &huart2);
 	// if (GPS_Init(&huart1) != HAL_OK)
 	// {
@@ -197,12 +193,40 @@ int main(void) {
 		sprintf(uart_buf, "ICM init err\r\n");
 		HAL_UART_Transmit(&huart1, (uint8_t*) uart_buf, strlen(uart_buf),
 		HAL_MAX_DELAY);
+		Error_Handler();
 	}
-	ICM42670_CalibrateGyro(&icm, 500, 2);
+	/* Keep the drone stationary (it may be tilted) throughout calibration. */
+	if (ICM42670_CalibrateGyro(&icm, 500, 2) != ICM42670_OK) {
+		Error_Handler();
+	}
 
-	Mahony_Init(&mahony);
+	/* Average gravity to initialize the actual tilt instead of zero angles. */
+	const uint16_t tilt_samples = 100U;
+	float ax_sum = 0.0f;
+	float ay_sum = 0.0f;
+	float az_sum = 0.0f;
+	for (uint16_t i = 0U; i < tilt_samples; ++i) {
+		if (ICM42670_ReadAll(&imu) != ICM42670_OK) {
+			Error_Handler();
+		}
+		ax_sum += imu.ax_g;
+		ay_sum += imu.ay_g;
+		az_sum += imu.az_g;
+		HAL_Delay(2U);
+	}
+	if (!Mahony_InitFromAccel(&mahony, ax_sum / tilt_samples,
+			ay_sum / tilt_samples, az_sum / tilt_samples)) {
+		Error_Handler();
+	}
+	Mahony_GetEuler(&mahony, &roll_deg, &pitch_deg, &yaw_deg);
 	AngleController_Init(&angle_ctrl);
 	RateController_Init(&rate_ctrl);
+
+	/* Apply the existing motor outputs only after stationary IMU calibration. */
+	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 1300);
+	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 1150);
+	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 1200);
+	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 1150);
 
 	// mmc.hi2c = &hi2c1;
 	// if (MMC5983_Init(&mmc) != HAL_OK)
@@ -213,6 +237,7 @@ int main(void) {
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
+	last_tick = HAL_GetTick();
 	while (1) {
 		/* USER CODE END WHILE */
 
@@ -242,6 +267,11 @@ int main(void) {
 
 		Mahony_GetEuler(&mahony, &roll_deg, &pitch_deg, &yaw_deg);
 
+		sprintf(tx_frame, "x=%.2f y=%.2f z=%.2f\n", roll_deg, pitch_deg,
+				yaw_deg);
+		HAL_UART_Transmit(&huart1, (uint8_t*) tx_frame, strlen(tx_frame),
+		HAL_MAX_DELAY);
+		HAL_Delay(50);
 		/*
 		 * Nếu IMU gắn khác chiều
 		 * thì đổi dấu tại đây
