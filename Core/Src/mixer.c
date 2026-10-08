@@ -1,36 +1,59 @@
-/*
- * mixer.c
- *
- *  Created on: 13 thg 9, 2026
- *      Author: khanh
- */
 
 #include "mixer.h"
+#include <math.h>
 
-static uint16_t LimitMotor(float value) {
-	if (value < 1000.0f)
-		value = 1000.0f;
+#define MOTOR_MIN_US 1000.0f
+#define MOTOR_MAX_US 1700.0f
 
-	if (value > 2000.0f)
-		value = 2000.0f;
+static uint16_t LimitMotor(float value)
+{
+	if (!isfinite(value))
+		return 1000U;
 
-	return (uint16_t) value;
+	if (value < MOTOR_MIN_US)
+		value = MOTOR_MIN_US;
+
+	if (value > MOTOR_MAX_US)
+		value = MOTOR_MAX_US;
+
+	return (uint16_t)(value + 0.5f);
 }
 
 void Mixer_QuadX(float throttle,
+				 float roll_pid,
+				 float pitch_pid,
+				 float yaw_pid,
+				 MotorMixer_t *motor)
+{
+	if (motor == NULL)
+		return;
 
-float roll_pid, float pitch_pid, float yaw_pid,
+	/*
+	 *          FRONT
+	 *
+	 *     M4 CW     M2 CCW
+	 *
+	 *           FC
+	 *
+	 *     M3 CCW    M1 CW
+	 *
+	 *           REAR
+	 *
+	 * IMU convention:
+	 * roll+  = rear down
+	 * pitch+ = right down
+	 * yaw+   = CCW
+	 *
+	 * PID output = target - feedback
+	 */
 
-MotorMixer_t *motor) {
-	float m1;
-	float m2;
-	float m3;
-	float m4;
+	float m1 = throttle - roll_pid - pitch_pid + yaw_pid;
 
-	m1 = throttle - roll_pid + pitch_pid - yaw_pid;
-	m2 = throttle + roll_pid - pitch_pid + yaw_pid;
-	m3 = throttle - roll_pid - pitch_pid + yaw_pid;
-	m4 = throttle + roll_pid + pitch_pid - yaw_pid;
+	float m2 = throttle + roll_pid - pitch_pid - yaw_pid;
+
+	float m3 = throttle - roll_pid + pitch_pid - yaw_pid;
+
+	float m4 = throttle + roll_pid + pitch_pid + yaw_pid;
 
 	motor->m1 = LimitMotor(m1);
 	motor->m2 = LimitMotor(m2);

@@ -93,7 +93,7 @@ float roll_pid;
 float pitch_pid;
 float yaw_pid;
 
-float throttle = 1500.0f;
+float throttle = 1400.0f;
 
 char uart_buf[128];
 
@@ -223,11 +223,10 @@ int main(void) {
 	RateController_Init(&rate_ctrl);
 
 	/* Apply the existing motor outputs only after stationary IMU calibration. */
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 1300);
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 1150);
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 1200);
-	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 1150);
-
+//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 1300);
+//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 1150);
+//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 1200);
+//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 1150);
 	// mmc.hi2c = &hi2c1;
 	// if (MMC5983_Init(&mmc) != HAL_OK)
 	// {
@@ -267,11 +266,6 @@ int main(void) {
 
 		Mahony_GetEuler(&mahony, &roll_deg, &pitch_deg, &yaw_deg);
 
-		sprintf(tx_frame, "x=%.2f y=%.2f z=%.2f\n", roll_deg, pitch_deg,
-				yaw_deg);
-		HAL_UART_Transmit(&huart1, (uint8_t*) tx_frame, strlen(tx_frame),
-		HAL_MAX_DELAY);
-		HAL_Delay(50);
 		/*
 		 * Nếu IMU gắn khác chiều
 		 * thì đổi dấu tại đây
@@ -297,7 +291,32 @@ int main(void) {
 		Mixer_QuadX(throttle, roll_pid, pitch_pid, yaw_pid, &motor);
 
 		/* ================= DSHOT ================= */
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, motor.m1);
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, motor.m2);
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, motor.m3);
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, motor.m4);
 
+		static uint32_t last_log_tick = 0U;
+
+		uint32_t log_now = HAL_GetTick();
+
+		if ((log_now - last_log_tick >= 100U)
+				&& (huart1.gState == HAL_UART_STATE_READY)) {
+			last_log_tick = log_now;
+
+			int len = snprintf(tx_frame, sizeof(tx_frame),
+					"gx=%.1f, gy=%.1f, gz=%.1f \n"
+							"angle=%.1f,%.1f pid=%.1f,%.1f \n"
+							"m=%u,%u,%u,%u\r\n\n", imu.gx_dps, imu.gy_dps,
+					imu.gz_dps, roll_deg, pitch_deg, roll_pid, pitch_pid,
+					(unsigned) motor.m1, (unsigned) motor.m2,
+					(unsigned) motor.m3, (unsigned) motor.m4);
+
+			if ((len > 0) && ((size_t) len < sizeof(tx_frame))) {
+				HAL_UART_Transmit_IT(&huart1, (uint8_t*) tx_frame,
+						(uint16_t) len);
+			}
+		}
 	}
 
 	/* USER CODE END 3 */
