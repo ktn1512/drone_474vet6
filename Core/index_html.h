@@ -21,15 +21,16 @@ button.alt{background:#334559}button.stop{background:#b52937}button:disabled{opa
 .statusgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
 .metric{background:#111a25;border-radius:8px;padding:12px}
 .metric strong{display:block;font-size:19px;font-variant-numeric:tabular-nums;margin-top:5px}
-.err{color:#ffa9ac}.success{color:#9de8b2}#message{min-height:20px}
+.metric strong.rawMessage{font:14px ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;line-height:1.5}
+.err{color:#ffa9ac}.success{color:#9de8b2}#message,#radioMessage{min-height:20px}
 @media(max-width:480px){body{padding:12px}.pidrow{gap:5px}.pidrow input{padding:8px 5px}.pidrow div:first-child{font-size:12px}}
 </style></head><body>
 <h1>Drone Control Dashboard</h1>
 <p>ESP32 Wi-Fi router (STA) → E220 UART → STM32G474. Thử nghiệm trên bàn, <b>tháo cánh quạt trước khi kích hoạt ga.</b></p>
-<div class="row"><span class="pill" id="radio">LoRa: chưa có phản hồi</span><span class="pill" id="armState">DISARMED</span><span class="pill" id="operation">Không có yêu cầu PID</span></div>
+<div class="row"><span class="pill" id="radio">E220: chưa có phản hồi</span><span class="pill" id="armState">DISARMED</span><span class="pill" id="operation">Không có yêu cầu PID</span></div>
 <section class="panel"><h2>Điều khiển ga ESC</h2>
 <div class="row"><div><div class="big"><span id="throttleText">1000</span> <small>µs</small></div><small>Đặt trong khoảng 1000–1700 µs</small></div>
-<div class="row"><button id="armBtn">ARM (1000 µs)</button><button id="stopBtn" class="stop">DISARM / STOP</button></div></div>
+<div class="row"><button id="armBtn" disabled>ARM (1000 µs)</button><button id="stopBtn" class="stop">DISARM / STOP</button></div></div>
 <input id="throttleRange" aria-label="Đặt mức ga" type="range" min="1000" max="1700" value="1000" step="1" disabled>
 <div class="row"><small>1000 µs</small><small>1700 µs</small></div>
 <small>Muốn ARM phải đặt ga bằng 1000 µs và có phản hồi mới từ drone. Đóng trang / mất kết nối web sẽ tự DISARM trên ESP32.</small></section>
@@ -46,6 +47,19 @@ button.alt{background:#334559}button.stop{background:#b52937}button:disabled{opa
 <div class="metric">Yaw<strong id="rxYaw">--</strong></div>
 <div class="metric">M1–M4 (µs)<strong id="rxMotors" style="font-size:14px">--</strong></div>
 </div></section>
+<section class="panel"><h2>Gửi nhận E220</h2><div class="statusgrid">
+<div class="metric">Gói gửi qua UART<strong id="radioTx">0</strong></div>
+<div class="metric">Dòng đã nhận<strong id="radioRx">0</strong></div>
+<div class="metric">Lỗi TX / RX<strong id="radioErrors">0 / 0</strong></div>
+<div class="metric">Lần nhận gần nhất<strong id="radioAge">--</strong></div>
+</div>
+<p id="radioReady">Đang đọc trạng thái E220...</p>
+<div class="metric">RX gần nhất<strong id="radioLastRx" class="rawMessage">--</strong></div>
+<div class="metric" style="margin-top:10px">TX gần nhất<strong id="radioLastTx" class="rawMessage">--</strong></div>
+<div class="row" style="margin-top:14px"><button id="radioTestBtn" class="alt" disabled>Gửi gói test E220</button></div>
+<p id="radioMessage" role="status"></p>
+<small>Gói gửi qua UART chưa xác nhận STM32 đã nhận. Các dòng test như “STM32 → ESP32” cho biết E220 có dữ liệu; cần gói status drone hợp lệ để hiển thị góc, ga và cho phép ARM.</small>
+</section>
 <script>
 const names=['Angle Roll','Angle Pitch','Rate Roll','Rate Pitch','Rate Yaw'];
 const el=id=>document.getElementById(id);
@@ -60,6 +74,8 @@ names.forEach((name,i)=>{
 let isArmed=false, editing=false, pidEditing=false, lastPIDKey='';
 const slider=el('throttleRange');
 function note(t,error=false){el('message').textContent=t;el('message').className=error?'err':'success';}
+function radioNote(t,error=false){el('radioMessage').textContent=t;el('radioMessage').className=error?'err':'success';}
+function disableRemoteControls(){el('armBtn').disabled=true;slider.disabled=true;el('radioTestBtn').disabled=true;}
 async function post(url,values={}){
  const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams(values)});
  const data=await res.json();if(!res.ok||!data.ok)throw new Error(data.error||`HTTP ${res.status}`);return data;
@@ -78,14 +94,26 @@ el('applyBtn').onclick=async()=>{
  try{await post('/api/pids',values);note('Đang gửi từng bộ PID, chờ drone xác nhận...')}catch(e){note(e.message,true)}
 };
 el('readBtn').onclick=async()=>{try{await post('/api/readpid');note('Đang đọc 5 bộ PID từ drone...')}catch(e){note(e.message,true)}};
+el('radioTestBtn').onclick=async()=>{
+ try{await post('/api/radio/test');radioNote('Đã xếp hàng gói test E220. Xem TX để kiểm tra gói đã gửi qua UART. Chưa có xác nhận nhận gói từ STM32.');await refresh()}
+ catch(e){radioNote(e.message,true)}
+};
 async function refresh(){
  try{
-  const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)return;
+  const r=await fetch('/api/state',{cache:'no-store'});if(!r.ok)throw new Error(`HTTP ${r.status}`);
   const d=await r.json();isArmed=d.armed;
   el('armState').textContent=d.armed?'ARMED':'DISARMED';
-  el('radio').textContent=d.link?'LoRa: có phản hồi':'LoRa: mất / chưa có phản hồi';
+  const radio=d.radio||{};
+  const recentRx=radio.rxAgeMs!=null&&radio.rxAgeMs<=4500;
+  el('radio').textContent=d.link?'E220: có status drone':recentRx?'E220: có dữ liệu, chờ status drone':'E220: chưa có phản hồi';
+  el('radioTx').textContent=radio.txCount??0;el('radioRx').textContent=radio.rxCount??0;
+  el('radioErrors').textContent=(radio.txErrors??0)+' / '+(radio.rxErrors??0);
+  el('radioAge').textContent=radio.rxAgeMs==null?'--':(radio.rxAgeMs/1000).toFixed(1)+' giây trước';
+  el('radioLastRx').textContent=radio.lastRx||'--';el('radioLastTx').textContent=radio.lastTx||'--';
+  el('radioReady').textContent=radio.testPending?'Đang chờ gửi gói test E220...':radio.auxConnected?(radio.auxReady?(radio.ready?'Sẵn sàng gửi UART E220.':'Chờ lượt gửi tiếp theo.'):'E220 đang bận (AUX LOW).'):(radio.ready?'Sẵn sàng gửi UART E220; AUX không nối.':'Chờ lượt gửi tiếp theo; AUX không nối.');
+  el('radioTestBtn').disabled=!!d.armed||!!d.pidBusy||!!radio.testPending;
   el('operation').textContent=d.operation;
-  slider.disabled=!d.armed||!d.link||!d.status||!d.status.armed;el('armBtn').disabled=d.armed;
+  slider.disabled=!d.armed||!d.link||!d.status||!d.status.armed;el('armBtn').disabled=d.armed||!d.link||!!d.pidBusy;
   if(!d.armed){slider.value=1000;el('throttleText').textContent='1000'}
   if(d.armed&&document.activeElement!==slider){slider.value=d.throttle;el('throttleText').textContent=d.throttle}
   if(d.status){const s=d.status;
@@ -102,7 +130,7 @@ async function refresh(){
     }
   }
   if(d.operation.startsWith('Đã đọc PID'))pidEditing=false;
- }catch(e){el('radio').textContent='ESP32: lỗi kết nối'}
+ }catch(e){el('radio').textContent='ESP32: lỗi kết nối';disableRemoteControls()}
 }
 fields.addEventListener('input',()=>{pidEditing=true});
 refresh();setInterval(refresh,500);

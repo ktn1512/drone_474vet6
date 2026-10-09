@@ -43,8 +43,58 @@ giữ address mặc định trên cả hai module, đổi `RADIO_ADDRESS` trong 
 ESP32 thành `0x0000` và kiểm tra các tham số còn lại. Ví dụ ESP32 dùng cấu
 hình tạm thời `C2` và áp dụng lại mỗi lần khởi động.
 
-`Core/esp32_drone_web.ino` chỉ dùng UART transparent; sketch này cũng cần
-module được cấu hình sẵn giống phía STM32.
+`Core/esp32_drone_web.ino` giữ web điều khiển ga, ARM và PID, dùng UART
+transparent với cấu hình đã lưu trong module. Sketch web **không gửi lệnh
+C2**, nên không tự đổi address thành `0x1234` như ví dụ ở trên. Cấu hình
+hai module cho khớp nhau trước khi dùng; UART ESP32 là 9600 8N1.
+
+## ESP32 web gửi/nhận E220
+
+| Chân E220 | ESP32 DevKit WROOM-32 | ESP32-S3 |
+| --- | --- | --- |
+| RXD | GPIO17 / TX2 | GPIO17 / TX2 |
+| TXD | GPIO16 / RX2 | GPIO18 / RX2 |
+| M0 | GPIO26 | GPIO4 |
+| M1 | GPIO27 | GPIO5 |
+| AUX | GPIO25 | GPIO6 |
+| VCC | Nguồn 5 V ổn định | Nguồn 5 V ổn định |
+| GND | GND chung với ESP32 | GND chung với ESP32-S3 |
+
+Sketch đặt M0/M1 LOW để gửi và nhận ở chế độ thường. Nếu AUX không nối,
+đặt `E220_AUX = -1` trong nhánh loại bo tương ứng. Khi có AUX, sketch chờ
+HIGH ổn định ít nhất 3 ms trước khi gửi; mọi lần gửi vẫn có khoảng nghỉ
+`MIN_RADIO_GAP_MS`. AUX và bộ đếm TX chỉ phản ánh trạng thái module/UART,
+không xác nhận module bên kia đã nhận gói.
+
+1. Sao chép `Core/esp32_drone_web.ino` và `Core/index_html.h` vào cùng thư
+   mục Arduino tên `esp32_drone_web`, rồi mở file `.ino` trong thư mục đó.
+2. Chỉnh `WIFI_SSID`, `WIFI_PASS` và GPIO theo bo; chọn **ESP32 Dev Module**
+   hoặc **ESP32S3 Dev Module** trong Arduino IDE rồi nạp.
+3. Mở Serial Monitor ở 115200 baud. Khi Wi-Fi kết nối, mở địa chỉ
+   `Dashboard: http://...` được in ra.
+4. Mục **Gửi nhận E220** hiển thị dòng RX/TX gần nhất, bộ đếm và lỗi.
+   Khi DISARM, bấm **Gửi gói test E220** để gửi `ESP32 -> STM32\r\n`.
+   Gói test được xếp hàng tới lượt gửi gần nhất, có timeout 2 giây nếu
+   module vẫn bận; theo dõi TX và bộ đếm lỗi để biết kết quả gửi UART.
+
+Web gửi lệnh `T` (ga/ARM), `P` (ghi PID), `G` (đọc PID) theo giao thức
+`DroneLink`: ASCII kèm XOR checksum `*HH` và ký tự `\n`. ESP32 nhận và xử
+lý `A`/`N` (ACK/từ chối), `R` (PID), `S` (telemetry), đồng thời hiển thị
+cả văn bản test không có checksum. Dòng quá dài, chứa NUL, hoặc bị ngắt
+giữa chừng được bỏ tới ký tự xuống dòng tiếp theo.
+
+Vòng `main.c` hiện đang test văn bản: gửi `STM32 -> ESP32\r\n` mỗi giây
+và đưa dữ liệu nhận ra USART1 (38400 baud). Vì `DroneLink_Poll` và vòng
+điều khiển đang được comment, chế độ này chưa xử lý lệnh ARM/ga/PID hay
+gửi status drone. Web sẽ hiển thị RX test nhưng vẫn khóa ARM khi chưa có
+status hợp lệ. Muốn điều khiển drone cần chạy lại vòng `DroneLink` phía
+STM32; RX văn bản thô không được dùng để bỏ qua điều kiện này.
+
+Sketch web đã được biên dịch thành object với Arduino-ESP32 3.3.12 và
+Xtensa GCC 14.2.0 cho ESP32, ESP32-S3 UART console và ESP32-S3 USB CDC.
+JavaScript của dashboard đã được kiểm tra với trạng thái API giả lập,
+gồm RX test, telemetry và khóa điều khiển khi mất kết nối. Chưa kiểm tra
+liên kết firmware hoàn chỉnh, nạp bo hoặc truyền nhận trên phần cứng.
 
 ## Dùng driver
 

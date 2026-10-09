@@ -1,19 +1,31 @@
 #include <Arduino.h>
+#include <HardwareSerial.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <math.h>
 #include "index_html.h"
 
-// Target: ESP32 DevKit V1 (classic ESP32), Arduino-ESP32 board package.
-// E220 must be configured with the same channel, address, UART 9600 8N1 and air rate as the STM32-side E220.
+// Arduino-ESP32: ESP32 DevKit / ESP32-S3, E220-900T22D in transparent mode.
+// Keep the module's stored settings. Address, channel, air rate and key must
+// match the STM32-side E220; UART must be 9600 8N1, appended RSSI disabled.
 constexpr char WIFI_SSID[] = "Mi 9T Pro";
 constexpr char WIFI_PASS[] = "khanhkhanh";
 constexpr uint32_t WIFI_RETRY_MS = 10000;
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+constexpr int E220_RX = 18; // ESP32-S3 RX <- E220 TXD
+constexpr int E220_TX = 17; // ESP32-S3 TX -> E220 RXD
+constexpr int E220_M0 = 4;
+constexpr int E220_M1 = 5;
+constexpr int E220_AUX = 6; // Set to -1 if AUX is not connected.
+#elif defined(CONFIG_IDF_TARGET_ESP32)
 constexpr int E220_RX = 16; // ESP32 RX2 <- E220 TXD
 constexpr int E220_TX = 17; // ESP32 TX2 -> E220 RXD
 constexpr int E220_M0 = 26;
 constexpr int E220_M1 = 27;
-constexpr int E220_AUX = 25;
+constexpr int E220_AUX = 25; // Set to -1 if AUX is not connected.
+#else
+#error "Select ESP32 Dev Module or ESP32S3 Dev Module."
+#endif
 constexpr uint32_t UART_BAUD = 9600;
 constexpr uint16_t MIN_THR = 1000;
 constexpr uint16_t MAX_THR = 1700;
@@ -21,6 +33,10 @@ constexpr uint32_t THROTTLE_PERIOD_MS = 250;
 constexpr uint32_t CLIENT_TIMEOUT_MS = 2500;
 constexpr uint32_t STATUS_VALID_MS = 4500;
 constexpr uint32_t MIN_RADIO_GAP_MS = 230;
+constexpr uint32_t AUX_SETTLE_MS = 3;
+constexpr uint32_t RX_PARTIAL_TIMEOUT_MS = 500;
+constexpr uint32_t RADIO_TEST_TIMEOUT_MS = 2000;
+constexpr size_t MAX_RADIO_PACKET_BYTES = 200;
 constexpr uint32_t ACK_TIMEOUT_MS = 1600;
 constexpr uint8_t MAX_ATTEMPTS = 3;
 
@@ -70,6 +86,79 @@ String opText = "Không có yêu cầu PID";
 
 char rxLine[176];
 size_t rxLength = 0;
+bool rxDiscard = false;
+uint32_t lastRxByteMs = 0;
+bool radioStarted = false;
+bool auxWasHigh = false;
+uint32_t auxHighSinceMs = 0;
+uint32_t radioTxCount = 0;
+uint32_t radioRxCount = 0;
+uint32_t radioRxErrors = 0;
+uint32_t radioTxErrors = 0;
+uint32_t lastRadioRxMs = 0;
+String lastRadioRx;
+String lastRadioTx;
+bool radioTestPending = false;
+uint32_t radioTestQueuedMs = 0;
+
+String jsonString(const String &value)
+{
+  String escaped;
+  escaped.reserve(value.length() + 2);
+  escaped += '"';
+  for (size_t i = 0; i < value.length(); ++i)
+  {
+    const uint8_t c = static_cast<uint8_t>(value[i]);
+    if (c == '"' || c == '\\')
+    {
+      escaped += '\\';
+      escaped += static_cast<char>(c);
+    }
+    else if (c >= 0x80)
+    {
+      // Preserve valid UTF-8 text; escape isolated bytes from binary/noisy RX.
+      const size_t count = c >= 0xC2 && c <= 0xDF ? 2 :
+                           c >= 0xE0 && c <= 0xEF ? 3 :
+                           c >= 0xF0 && c <= 0xF4 ? 4 : 0;
+      bool valid = count != 0 && i + count <= value.length();
+      for (size_t j = 1; valid && j < count; ++j)
+      {
+        const uint8_t next = static_cast<uint8_t>(value[i + j]);
+        valid = next >= 0x80 && next <= 0xBF;
+        if (j == 1)
+          valid = valid && !(c == 0xE0 && next < 0xA0) &&
+                  !(c == 0xED && next > 0x9F) &&
+                  !(c == 0xF0 && next < 0x90) &&
+                  !(c == 0xF4 && next > 0x8F);
+      }
+      if (valid)
+      {
+        for (size_t j = 0; j < count; ++j)
+          escaped += value[i + j];
+        i += count - 1;
+      }
+      else
+      {
+        char hex[7];
+        snprintf(hex, sizeof(hex), "\\u%04X", static_cast<unsigned>(c));
+        escaped += hex;
+      }
+    }
+    else if (c < 0x20 || c == 0x7F)
+    {
+      // Radio input may contain arbitrary bytes; always emit valid JSON.
+      char hex[7];
+      snprintf(hex, sizeof(hex), "\\u%04X", static_cast<unsigned>(c));
+      escaped += hex;
+    }
+    else
+    {
+      escaped += static_cast<char>(c);
+    }
+  }
+  escaped += '"';
+  return escaped;
+}
 
 uint8_t xorChecksum(const String &s)
 {
@@ -99,21 +188,60 @@ bool decodeFrame(String &raw)
   return xorChecksum(raw) == want;
 }
 
-bool radioReady(uint32_t now)
+bool radioAuxReady(uint32_t now)
 {
-  return digitalRead(E220_AUX) == HIGH && (uint32_t)(now - lastTxMs) >= MIN_RADIO_GAP_MS;
+  if (E220_AUX < 0)
+    return true;
+  if (digitalRead(E220_AUX) == LOW)
+  {
+    auxWasHigh = false;
+    return false;
+  }
+  if (!auxWasHigh)
+  {
+    auxWasHigh = true;
+    auxHighSinceMs = now;
+  }
+  return (uint32_t)(now - auxHighSinceMs) >= AUX_SETTLE_MS;
 }
 
-bool sendRadio(const String &payload)
+bool radioReady(uint32_t now)
+{
+  return radioStarted && radioAuxReady(now) &&
+         (uint32_t)(now - lastTxMs) >= MIN_RADIO_GAP_MS;
+}
+
+bool sendRadioBytes(const String &packet, const String &description)
 {
   uint32_t now = millis();
   if (!radioReady(now))
     return false;
-  LoRa.print(frameOf(payload));
-  lastTxMs = now;
+  if (packet.length() == 0 || packet.length() > MAX_RADIO_PACKET_BYTES)
+  {
+    ++radioTxErrors;
+    return false;
+  }
+  const size_t written = LoRa.write(
+      reinterpret_cast<const uint8_t *>(packet.c_str()), packet.length());
+  // Wait for UART TX only, preserving incoming RX bytes. AUX is not an ACK.
+  LoRa.flush(true);
+  lastTxMs = millis();
+  if (written != packet.length())
+  {
+    ++radioTxErrors;
+    Serial.println("E220 UART write failed");
+    return false;
+  }
+  ++radioTxCount;
+  lastRadioTx = description;
   Serial.print("TX > ");
-  Serial.println(payload);
+  Serial.println(description);
   return true;
+}
+
+bool sendRadio(const String &payload)
+{
+  return sendRadioBytes(frameOf(payload), payload);
 }
 
 void stopMotors()
@@ -142,15 +270,20 @@ void respondOk()
 }
 void respondError(const String &reason, int status = 400)
 {
-  web.send(status, "application/json", "{\"ok\":false,\"error\":\"" + reason + "\"}");
+  web.send(status, "application/json", "{\"ok\":false,\"error\":" + jsonString(reason) + "}");
 }
 
 void onFrame(String frame)
 {
-  if (!decodeFrame(frame))
+  // The STM32 test loop sends plain text. Display it without making it
+  // telemetry or using it to satisfy the ARM/failsafe requirements.
+  if (frame.indexOf('*') < 0)
     return;
-  Serial.print("RX < ");
-  Serial.println(frame);
+  if (!decodeFrame(frame))
+  {
+    ++radioRxErrors;
+    return;
+  }
   unsigned long seq = 0;
   unsigned id = 0;
   char kind = frame[0];
@@ -215,6 +348,8 @@ void onFrame(String frame)
 
 void pollRadio()
 {
+  uint32_t now = millis();
+  radioAuxReady(now);
   while (LoRa.available() > 0)
   {
     int data = LoRa.read();
@@ -223,37 +358,49 @@ void pollRadio()
       break;
 
     char c = (char)data;
-
-    // Xem tung byte nhan duoc
-    Serial.printf("RX BYTE: 0x%02X\n",
-                  (unsigned)data);
+    lastRxByteMs = millis();
 
     if (c == '\n')
     {
-      rxLine[rxLength] = '\0';
-
-      Serial.print("RAW RX: [");
-      Serial.print(rxLine);
-      Serial.println("]");
-
-      if (rxLength > 0)
+      if (!rxDiscard && rxLength > 0)
       {
-        onFrame(String(rxLine));
+        rxLine[rxLength] = '\0';
+        lastRadioRx = String(rxLine, rxLength);
+        lastRadioRxMs = millis();
+        ++radioRxCount;
+        Serial.print("RX < ");
+        Serial.println(lastRadioRx);
+        onFrame(lastRadioRx);
       }
-
       rxLength = 0;
+      rxDiscard = false;
     }
     else if (c != '\r')
     {
-      if (rxLength < sizeof(rxLine) - 1)
+      if (rxDiscard)
+        continue;
+      if (c != '\0' && rxLength < sizeof(rxLine) - 1)
       {
         rxLine[rxLength++] = c;
       }
       else
       {
+        ++radioRxErrors;
         rxLength = 0;
+        rxDiscard = true;
       }
     }
+  }
+  // Drain buffered UART data first: a slow HTTP request must not turn a
+  // complete, already-received frame into an apparent radio timeout.
+  if ((rxLength > 0 || rxDiscard) &&
+      (uint32_t)(millis() - lastRxByteMs) > RX_PARTIAL_TIMEOUT_MS)
+  {
+    if (!rxDiscard)
+      ++radioRxErrors;
+    rxLength = 0;
+    // Stay out of sync until a newline ends the truncated frame.
+    rxDiscard = true;
   }
 }
 
@@ -279,6 +426,28 @@ void processRadioTx()
   {
     stopMotors();
     Serial.println("Drone status timeout -> DISARM");
+  }
+
+  // Give a queued test packet the next radio slot instead of rejecting a
+  // button press during the gap between automatic throttle heartbeats.
+  if (radioTestPending)
+  {
+    if (armed || operation != OP_NONE || (freshStatus() && rxArmed))
+    {
+      radioTestPending = false;
+    }
+    else if ((uint32_t)(now - radioTestQueuedMs) >= RADIO_TEST_TIMEOUT_MS)
+    {
+      radioTestPending = false;
+      ++radioTxErrors;
+      Serial.println("E220 test timeout: AUX did not become ready");
+    }
+    else if (radioReady(now))
+    {
+      sendRadioBytes("ESP32 -> STM32\r\n", "ESP32 -> STM32");
+      radioTestPending = false;
+      now = millis();
+    }
   }
 
   if (operation != OP_NONE)
@@ -312,7 +481,7 @@ void processRadioTx()
       waitingSeq = nextSeq++;
       waiting = true;
       attempts++;
-      lastOpMs = now;
+      lastOpMs = millis();
       opText = (operation == OP_APPLY ? "Đang gửi PID: " : "Đang đọc PID: ") + String(opIndex) + "/5";
     }
     return;
@@ -321,7 +490,7 @@ void processRadioTx()
   {
     String payload = "T," + String(nextSeq++) + "," + String(armed ? throttle : MIN_THR) + "," + String(armed ? 1 : 0);
     if (sendRadio(payload))
-      lastThrottleTxMs = now;
+      lastThrottleTxMs = millis();
   }
 }
 
@@ -333,13 +502,25 @@ void setupWebRoutes()
          {
     lastWebMs = millis();
     String json;
-    json.reserve(900);
-    json = "{\"armed\":" + String(armed ? "true" : "false") + ",\"throttle\":" + String(throttle) + ",\"link\":" + String(freshStatus() ? "true" : "false") + ",\"operation\":\"" + opText + "\",\"pids\":[";
+    json.reserve(2200);
+    json = "{\"armed\":" + String(armed ? "true" : "false") + ",\"throttle\":" + String(throttle) + ",\"link\":" + String(freshStatus() ? "true" : "false") + ",\"operation\":" + jsonString(opText) + ",\"pids\":[";
     for (int i = 0; i < 5; i++) {
       if (i) json += ',';
       json += "{\"kp\":" + String(pids[i].kp, 4) + ",\"ki\":" + String(pids[i].ki, 4) + ",\"kd\":" + String(pids[i].kd, 4) + "}";
     }
-    json += "]";
+    json += "],\"pidBusy\":" + String(operation != OP_NONE ? "true" : "false");
+    const uint32_t now = millis();
+    json += ",\"radio\":{\"ready\":" + String(radioReady(now) ? "true" : "false") +
+            ",\"auxConnected\":" + String(E220_AUX >= 0 ? "true" : "false") +
+            ",\"auxReady\":" + String(radioAuxReady(now) ? "true" : "false") +
+            ",\"txCount\":" + String(radioTxCount) +
+            ",\"rxCount\":" + String(radioRxCount) +
+            ",\"rxErrors\":" + String(radioRxErrors) +
+            ",\"txErrors\":" + String(radioTxErrors) +
+            ",\"testPending\":" + String(radioTestPending ? "true" : "false") +
+            ",\"rxAgeMs\":" + (radioRxCount ? String((uint32_t)(now - lastRadioRxMs)) : String("null")) +
+            ",\"lastRx\":" + jsonString(lastRadioRx) +
+            ",\"lastTx\":" + jsonString(lastRadioTx) + "}";
     if (statusSeen) {
       json += ",\"status\":{\"throttle\":" + String(rxThrottle) + ",\"armed\":" + String(rxArmed ? "true" : "false") + ",\"roll\":" + String(rxRoll, 1) + ",\"pitch\":" + String(rxPitch, 1) + ",\"yaw\":" + String(rxYaw, 1) + ",\"motors\":[";
       for (int i = 0; i < 4; i++) {
@@ -423,6 +604,23 @@ void setupWebRoutes()
     }
     startOperation(OP_READ);
     respondOk(); });
+  web.on("/api/radio/test", HTTP_POST, []()
+         {
+    if (armed || operation != OP_NONE || (freshStatus() && rxArmed)) {
+      respondError("Chi test E220 khi drone DISARM va khong co tac vu PID", 409);
+      return;
+    }
+    if (!radioStarted) {
+      respondError("UART E220 chua khoi dong", 503);
+      return;
+    }
+    if (radioTestPending) {
+      respondError("Da co goi test dang cho gui", 409);
+      return;
+    }
+    radioTestPending = true;
+    radioTestQueuedMs = millis();
+    web.send(200, "application/json", "{\"ok\":true,\"queued\":true}"); });
   web.onNotFound([]()
                  { web.send(404, "text/plain", "Not found"); });
 }
@@ -432,30 +630,28 @@ void setup()
   Serial.begin(115200);
   pinMode(E220_M0, OUTPUT);
   pinMode(E220_M1, OUTPUT);
-  pinMode(E220_AUX, INPUT_PULLUP);
+  if (E220_AUX >= 0)
+    pinMode(E220_AUX, INPUT_PULLUP);
   digitalWrite(E220_M0, LOW);
   digitalWrite(E220_M1, LOW); // Normal / transparent mode
+  LoRa.setRxBufferSize(512);
+  LoRa.setTxBufferSize(256);
   LoRa.begin(UART_BAUD, SERIAL_8N1, E220_RX, E220_TX);
+  radioStarted = static_cast<bool>(LoRa);
+  if (!radioStarted)
+  {
+    ++radioTxErrors;
+    Serial.println("E220 UART initialization failed");
+  }
+  Serial.printf("E220: RX=%d TX=%d M0=%d M1=%d AUX=%d, %lu baud 8N1\n",
+                E220_RX, E220_TX, E220_M0, E220_M1, E220_AUX,
+                static_cast<unsigned long>(UART_BAUD));
 
   // Station mode: ket noi router Wi-Fi 2.4 GHz cua ban
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(true);
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  if (WiFi.status() == WL_CONNECTED)
-  {
-    Serial.println("\nWiFi Connected!");
-
-    Serial.print("IP Address: ");
-    Serial.println(WiFi.localIP());
-
-    Serial.print("Web Server: http://");
-    Serial.println(WiFi.localIP());
-  }
-  else
-  {
-    Serial.println("\nWiFi Connection Failed!");
-  }
   // Web server tu dong phuc vu khi ESP32 ket noi Wi-Fi thanh cong
   setupWebRoutes();
   web.begin();
