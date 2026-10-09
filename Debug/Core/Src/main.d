@@ -37,10 +37,12 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
  ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal_uart_ex.h \
  ../USB_Device/App/usb_device.h \
  ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_def.h \
- ../USB_Device/Target/usbd_conf.h ../Core/Inc/e22.h ../Core/Inc/main.h \
+ ../USB_Device/Target/usbd_conf.h ../Core/Inc/e220.h \
  ../Core/Inc/icm42670.h ../Core/Inc/gps.h ../Core/Inc/mmc5983ma.h \
  ../Core/Inc/angle_controller.h ../Core/Inc/pid.h \
- ../Core/Inc/rate_controller.h ../Core/Inc/mixer.h ../Core/Inc/mahony.h
+ ../Core/Inc/rate_controller.h ../Core/Inc/mixer.h ../Core/Inc/mahony.h \
+ ../Core/Inc/drone_link.h ../Core/Inc/e220.h \
+ ../Core/Inc/angle_controller.h ../Core/Inc/rate_controller.h
 ../Core/Inc/main.h:
 ../Drivers/STM32G4xx_HAL_Driver/Inc/stm32g4xx_hal.h:
 ../Core/Inc/stm32g4xx_hal_conf.h:
@@ -81,8 +83,7 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../USB_Device/App/usb_device.h:
 ../Middlewares/ST/STM32_USB_Device_Library/Core/Inc/usbd_def.h:
 ../USB_Device/Target/usbd_conf.h:
-../Core/Inc/e22.h:
-../Core/Inc/main.h:
+../Core/Inc/e220.h:
 ../Core/Inc/icm42670.h:
 ../Core/Inc/gps.h:
 ../Core/Inc/mmc5983ma.h:
@@ -91,3 +92,7 @@ Core/Src/main.o: ../Core/Src/main.c ../Core/Inc/main.h \
 ../Core/Inc/rate_controller.h:
 ../Core/Inc/mixer.h:
 ../Core/Inc/mahony.h:
+../Core/Inc/drone_link.h:
+../Core/Inc/e220.h:
+../Core/Inc/angle_controller.h:
+../Core/Inc/rate_controller.h:

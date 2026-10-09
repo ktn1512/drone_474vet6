@@ -1,0 +1,12 @@
+../Core/Src/e220.c:5:12:valid_handle	5
+../Core/Src/e220.c:11:12:supported_baud	15
+../Core/Src/e220.c:28:19:E220_Init	9
+../Core/Src/e220.c:45:26:validate_send	7
+../Core/Src/e220.c:58:19:E220_Send	3
+../Core/Src/e220.c:74:19:E220_SendString	4
+../Core/Src/e220.c:87:19:E220_Send_IT	3
+../Core/Src/e220.c:96:6:E220_RxCallback	3
+../Core/Src/e220.c:115:6:E220_ErrorCallback	3
+../Core/Src/e220.c:129:10:E220_Available	2
+../Core/Src/e220.c:139:9:E220_ReadByte	3
+../Core/Src/e220.c:156:10:E220_Read	5

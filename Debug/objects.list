@@ -1,6 +1,7 @@
 "./Core/Src/angle_controller.o"
+"./Core/Src/drone_link.o"
 "./Core/Src/dshot.o"
-"./Core/Src/e22.o"
+"./Core/Src/e220.o"
 "./Core/Src/gps.o"
 "./Core/Src/icm42670.o"
 "./Core/Src/mahony.o"
