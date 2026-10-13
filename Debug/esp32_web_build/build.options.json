@@ -1,0 +1,9 @@
+{
+  "additionalFiles": "..\\..",
+  "compiler.optimization_flags": "-Os",
+  "customBuildProperties": "",
+  "fqbn": "esp32:esp32:esp32",
+  "hardwareFolders": "C:\\Users\\khanh\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.12,C:\\Users\\khanh\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.12",
+  "otherLibrariesFolders": "C:\\Users\\khanh\\Documents\\Arduino\\libraries",
+  "sketchLocation": "C:\\Users\\khanh\\Documents\\stm32prj\\drone_474vet6\\Core\\esp32_drone_web"
+}

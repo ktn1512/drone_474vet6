@@ -67,9 +67,13 @@ TIM_HandleTypeDef htim5;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
+DMA_HandleTypeDef hdma_usart2_rx;
+DMA_HandleTypeDef hdma_usart2_tx;
 
 /* USER CODE BEGIN PV */
 E220_t lora;
+/* USART2 TX uses CubeMX DMA1_Channel2; E220 RX remains interrupt-driven. */
+volatile uint32_t e220_uart_tx_done = 0;
 
 DroneLink_t drone_link;
 
@@ -100,13 +104,13 @@ float throttle = 1000.0f;
 
 char uart_buf[128];
 
-static char tx_frame[256];
-static uint32_t seq = 0;
+static char tx_frame[360];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_I2C1_Init(void);
 static void MX_I2C2_Init(void);
 static void MX_USART1_UART_Init(void);
@@ -130,15 +134,15 @@ static void MX_TIM5_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-char buf[30] = "hello";
 uint32_t last_tick;
+
 /* USER CODE END 0 */
 
 /**
  * @brief  The application entry point.
  * @retval int
  */
-int main(void) {
+int main() {
 
 	/* USER CODE BEGIN 1 */
 
@@ -162,6 +166,7 @@ int main(void) {
 
 	/* Initialize all configured peripherals */
 	MX_GPIO_Init();
+	MX_DMA_Init();
 	MX_I2C1_Init();
 	MX_I2C2_Init();
 	MX_USART1_UART_Init();
@@ -224,6 +229,8 @@ int main(void) {
 	AngleController_Init(&angle_ctrl);
 	RateController_Init(&rate_ctrl);
 
+	/* MX_USART2_UART_Init already links TX DMA1_Channel2 and enables USART2 IRQ. */
+
 	/* E220-900T22D: M0/M1 tied to GND, AUX disconnected, UART 9600 8N1.
 	 * Radio address/channel/air rate must match the peer's stored settings.
 	 */
@@ -232,8 +239,11 @@ int main(void) {
 	}
 
 	DroneLink_Init(&drone_link, &lora, &angle_ctrl, &rate_ctrl);
+	motor.m1 = motor.m2 = motor.m3 = motor.m4 = 1000U;
+	/* Tranh dt dau tien bang toan bo thoi gian khoi tao/calibrate IMU. */
+	last_tick = HAL_GetTick();
 
-	E220_SendString(&lora, "TEST_STM32\r\n");
+	/* E220 packet TX uses DMA; S is sent on T request (no periodic S). */
 	/* Apply the existing motor outputs only after stationary IMU calibration. */
 	//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 1300);
 	//	__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 1150);
@@ -248,155 +258,130 @@ int main(void) {
 
 	/* Infinite loop */
 	/* USER CODE BEGIN WHILE */
+
 	while (1) {
-		last_tick = HAL_GetTick();
-		static uint32_t last_tx = 0;
+		/* USER CODE END WHILE */
 
-		if (HAL_GetTick() - last_tx >= 1000) {
-			last_tx = HAL_GetTick();
+		/* USER CODE BEGIN 3 */
+		DroneLink_Poll(&drone_link);
 
-			char msg[] = "STM32 -> ESP32\r\n";
+		/* Polling logic executes in main (never inside DMA IRQ).
+		 * T received -> one S via USART2 DMA, PID replies take priority. */
+		(void) DroneLink_SendStatus(&drone_link, roll_deg, pitch_deg, yaw_deg,
+				motor.m1, motor.m2, motor.m3, motor.m4);
 
-			E220_Send(&lora, (uint8_t*) msg, strlen(msg));
+		uint32_t now = HAL_GetTick();
 
-			HAL_UART_Transmit(&huart1, (uint8_t*) "TX: STM32 -> ESP32\r\n", 19,
-					100);
+		float dt = (now - last_tick) * 0.001f;
+
+		if (dt < 0.002f) {
+			continue;
 		}
 
-		uint8_t buf[128];
+		last_tick = now;
 
-		uint16_t len = E220_Read(&lora, buf, sizeof(buf));
+		/* ================= IMU ================= */
 
-		if (len) {
-			HAL_UART_Transmit(&huart1, (uint8_t*) "RX: ", 4, 100);
+		if (ICM42670_ReadAll(&imu) != ICM42670_OK) {
+			// IMU failure must not leave the previous motor PWM active.
+			DroneLink_SetMinimumThrottle(&drone_link);
+			__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, 1000);
+			__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, 1000);
+			__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, 1000);
+			__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, 1000);
+			motor.m1 = motor.m2 = motor.m3 = motor.m4 = 1000;
+			continue;
+		}
 
-			HAL_UART_Transmit(&huart1, buf, len, 100);
+		ICM42670_ApplyCalibration(&icm, &imu);
+
+		/* ================= MAHONY ================= */
+
+		Mahony_Update(&mahony, imu.gx_dps, imu.gy_dps, imu.gz_dps, imu.ax_g,
+				imu.ay_g, imu.az_g, dt);
+
+		Mahony_GetEuler(&mahony, &roll_deg, &pitch_deg, &yaw_deg);
+
+		/*
+		 * Nếu IMU gắn khác chiều
+		 * thì đổi dấu tại đây
+		 */
+
+		// roll_deg  = -roll_deg;
+		// pitch_deg = -pitch_deg;
+		/* ================= ANGLE PID ================= */
+
+		AngleController_Update(&angle_ctrl, 0.0f, // roll target
+				0.0f,			  // pitch target
+
+				roll_deg, pitch_deg, dt, &roll_rate_sp, &pitch_rate_sp);
+
+		/* ================= RATE PID ================= */
+
+		RateController_Update(&rate_ctrl, roll_rate_sp, pitch_rate_sp, 0.0f,
+				imu.gx_dps, imu.gy_dps, imu.gz_dps, dt, &roll_pid, &pitch_pid,
+				&yaw_pid);
+
+		/* ================= MIXER ================= */
+
+		throttle = (float) DroneLink_Throttle(&drone_link);
+		if (throttle > 1000.0f) {
+			Mixer_QuadX(throttle, roll_pid, pitch_pid, yaw_pid, &motor);
+		} else {
+			motor.m1 = motor.m2 = motor.m3 = motor.m4 = 1000U;
+			PID_Reset(&angle_ctrl.roll);
+			PID_Reset(&angle_ctrl.pitch);
+			PID_Reset(&rate_ctrl.roll);
+			PID_Reset(&rate_ctrl.pitch);
+			PID_Reset(&rate_ctrl.yaw);
+		}
+
+		// Xuat PWM ra ESC
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, motor.m1);
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, motor.m2);
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, motor.m3);
+		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, motor.m4);
+
+		static uint32_t last_log_tick = 0U;
+
+		uint32_t log_now = HAL_GetTick();
+
+		if ((log_now - last_log_tick >= 500U)
+				&& (huart1.gState == HAL_UART_STATE_READY)) {
+			last_log_tick = log_now;
+
+			int len =
+					snprintf(tx_frame, sizeof(tx_frame),
+							"thr=%u angle=%.1f,%.1f,%.1f pid=%.1f,%.1f m=%u,%u,%u,%u\r\n"
+									"LORA T_RX=%lu P_WR=%lu P_RD=%lu TIMEOUT=%lu BAD=%lu"
+									" RX_BYTE=%lu S_REQ=%lu TX_DMA_START=%lu TX_DMA_DONE=%lu"
+									" TX_BUSY=%lu TX_ERR=%lu UART_ERR=%lu\r\n",
+							(unsigned) DroneLink_Throttle(&drone_link),
+							roll_deg, pitch_deg, yaw_deg, roll_pid, pitch_pid,
+							(unsigned) motor.m1, (unsigned) motor.m2,
+							(unsigned) motor.m3, (unsigned) motor.m4,
+							(unsigned long) drone_link.throttle_rx_count,
+							(unsigned long) drone_link.pid_write_count,
+							(unsigned long) drone_link.pid_read_count,
+							(unsigned long) drone_link.throttle_timeout_count,
+							(unsigned long) drone_link.rx_invalid_frames,
+							(unsigned long) drone_link.rx_byte_count,
+							(unsigned long) drone_link.status_request_count,
+							(unsigned long) lora.tx_start_count,
+							(unsigned long) lora.tx_done_count,
+							(unsigned long) lora.tx_busy_count,
+							(unsigned long) lora.tx_error_count,
+							(unsigned long) lora.uart_error_count);
+
+			if ((len > 0) && ((size_t) len < sizeof(tx_frame))) {
+				HAL_UART_Transmit_IT(&huart1, (uint8_t*) tx_frame,
+						(uint16_t) len);
+			}
 		}
 	}
-	// 	while (1) {
-	// 		/* USER CODE END WHILE */
-
-	// 		/* USER CODE BEGIN 3 */
-	// 		DroneLink_Poll(&drone_link);
-
-	// 		uint32_t now = HAL_GetTick();
-
-	// 		float dt = (now - last_tick) * 0.001f;
-
-	// 		if (dt < 0.002f) {
-	// 			continue;
-	// 		}
-
-	// 		last_tick = now;
-
-	// 		/* ================= IMU ================= */
-
-	// 		if (ICM42670_ReadAll(&imu) != ICM42670_OK) {
-	// 			continue;
-	// 		}
-
-	// 		ICM42670_ApplyCalibration(&icm, &imu);
-
-	// 		/* ================= MAHONY ================= */
-
-	// 		Mahony_Update(&mahony, imu.gx_dps, imu.gy_dps, imu.gz_dps, imu.ax_g,
-	// 				imu.ay_g, imu.az_g, dt);
-
-	// 		Mahony_GetEuler(&mahony, &roll_deg, &pitch_deg, &yaw_deg);
-
-	// 		/*
-	// 		 * Nếu IMU gắn khác chiều
-	// 		 * thì đổi dấu tại đây
-	// 		 */
-
-	// 		// roll_deg  = -roll_deg;
-	// 		// pitch_deg = -pitch_deg;
-	// 		/* ================= ANGLE PID ================= */
-
-	// 		AngleController_Update(&angle_ctrl, 0.0f, // roll target
-	// 				0.0f,			  // pitch target
-
-	// 				roll_deg, pitch_deg, dt, &roll_rate_sp, &pitch_rate_sp);
-
-	// 		/* ================= RATE PID ================= */
-
-	// 		RateController_Update(&rate_ctrl, roll_rate_sp, pitch_rate_sp, 0.0f,
-	// 				imu.gx_dps, imu.gy_dps, imu.gz_dps, dt, &roll_pid, &pitch_pid,
-	// 				&yaw_pid);
-
-	// 		/* ================= MIXER ================= */
-
-	// 		static bool old_armed = false;
-
-	// 		bool armed = DroneLink_Armed(&drone_link);
-
-	// 		// Reset PID khi thay doi trang thai ARM
-	// 		if (armed != old_armed) {
-	// 			PID_Reset(&angle_ctrl.roll);
-	// 			PID_Reset(&angle_ctrl.pitch);
-
-	// 			PID_Reset(&rate_ctrl.roll);
-	// 			PID_Reset(&rate_ctrl.pitch);
-	// 			PID_Reset(&rate_ctrl.yaw);
-
-	// 			old_armed = armed;
-	// 		}
-
-	// 		if (armed) {
-	// 			// Lay ga nhan tu LoRa
-	// 			throttle = (float) DroneLink_Throttle(&drone_link);
-
-	// 			Mixer_QuadX(throttle, roll_pid, pitch_pid, yaw_pid, &motor);
-	// 		} else {
-	// 			throttle = 1000.0f;
-
-	// 			motor.m1 = 1000;
-	// 			motor.m2 = 1000;
-	// 			motor.m3 = 1000;
-	// 			motor.m4 = 1000;
-	// 		}
-
-	// 		// Xuat PWM ra ESC
-	// 		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_1, motor.m1);
-	// 		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_2, motor.m2);
-	// 		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_3, motor.m3);
-	// 		__HAL_TIM_SET_COMPARE(&htim5, TIM_CHANNEL_4, motor.m4);
-
-	// 		static uint32_t last_radio_status = 0;
-
-	// 		uint32_t t = HAL_GetTick();
-
-	// 		if (t - last_radio_status >= 1500U) {
-	// 			last_radio_status = t;
-
-	// 			DroneLink_SendStatus(&drone_link, roll_deg, pitch_deg, yaw_deg,
-	// 					motor.m1, motor.m2, motor.m3, motor.m4);
-	// 		}
-	// 		static uint32_t last_log_tick = 0U;
-
-	// 		uint32_t log_now = HAL_GetTick();
-
-	// 		if ((log_now - last_log_tick >= 100U)
-	// 				&& (huart1.gState == HAL_UART_STATE_READY)) {
-	// 			last_log_tick = log_now;
-
-	// 			int len = snprintf(tx_frame, sizeof(tx_frame),
-	// 					"gx=%.1f, gy=%.1f, gz=%.1f \n"
-	// 							"angle=%.1f,%.1f pid=%.1f,%.1f \n"
-	// 							"m=%u,%u,%u,%u\r\n\n", imu.gx_dps, imu.gy_dps,
-	// 					imu.gz_dps, roll_deg, pitch_deg, roll_pid, pitch_pid,
-	// 					(unsigned) motor.m1, (unsigned) motor.m2,
-	// 					(unsigned) motor.m3, (unsigned) motor.m4);
-
-	// 			if ((len > 0) && ((size_t) len < sizeof(tx_frame))) {
-	// 				HAL_UART_Transmit_IT(&huart1, (uint8_t*) tx_frame,
-	// 						(uint16_t) len);
-	// 			}
-	// 		}
-
-	// 		/* USER CODE END 3 */
-	// 	}
+	/* USER CODE END 3 */
 }
+
 /**
  * @brief System Clock Configuration
  * @retval None
@@ -484,6 +469,7 @@ static void MX_I2C1_Init(void) {
 	/* USER CODE BEGIN I2C1_Init 2 */
 
 	/* USER CODE END I2C1_Init 2 */
+
 }
 
 /**
@@ -528,6 +514,7 @@ static void MX_I2C2_Init(void) {
 	/* USER CODE BEGIN I2C2_Init 2 */
 
 	/* USER CODE END I2C2_Init 2 */
+
 }
 
 /**
@@ -572,6 +559,7 @@ static void MX_I2C3_Init(void) {
 	/* USER CODE BEGIN I2C3_Init 2 */
 
 	/* USER CODE END I2C3_Init 2 */
+
 }
 
 /**
@@ -609,6 +597,7 @@ static void MX_SPI1_Init(void) {
 	/* USER CODE BEGIN SPI1_Init 2 */
 
 	/* USER CODE END SPI1_Init 2 */
+
 }
 
 /**
@@ -646,6 +635,7 @@ static void MX_SPI2_Init(void) {
 	/* USER CODE BEGIN SPI2_Init 2 */
 
 	/* USER CODE END SPI2_Init 2 */
+
 }
 
 /**
@@ -683,6 +673,7 @@ static void MX_SPI3_Init(void) {
 	/* USER CODE BEGIN SPI3_Init 2 */
 
 	/* USER CODE END SPI3_Init 2 */
+
 }
 
 /**
@@ -750,6 +741,7 @@ static void MX_TIM5_Init(void) {
 
 	/* USER CODE END TIM5_Init 2 */
 	HAL_TIM_MspPostInit(&htim5);
+
 }
 
 /**
@@ -794,6 +786,7 @@ static void MX_USART1_UART_Init(void) {
 	/* USER CODE BEGIN USART1_Init 2 */
 
 	/* USER CODE END USART1_Init 2 */
+
 }
 
 /**
@@ -838,6 +831,7 @@ static void MX_USART2_UART_Init(void) {
 	/* USER CODE BEGIN USART2_Init 2 */
 
 	/* USER CODE END USART2_Init 2 */
+
 }
 
 /**
@@ -882,6 +876,26 @@ static void MX_USART3_UART_Init(void) {
 	/* USER CODE BEGIN USART3_Init 2 */
 
 	/* USER CODE END USART3_Init 2 */
+
+}
+
+/**
+ * Enable DMA controller clock
+ */
+static void MX_DMA_Init(void) {
+
+	/* DMA controller clock enable */
+	__HAL_RCC_DMAMUX1_CLK_ENABLE();
+	__HAL_RCC_DMA1_CLK_ENABLE();
+
+	/* DMA interrupt init */
+	/* DMA1_Channel1_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+	/* DMA1_Channel2_IRQn interrupt configuration */
+	HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 0, 0);
+	HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
+
 }
 
 /**
@@ -929,9 +943,17 @@ static void MX_GPIO_Init(void) {
 }
 
 /* USER CODE BEGIN 4 */
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	if (huart->Instance == USART2) {
 		E220_RxCallback(&lora);
+	}
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+	if (huart->Instance == USART2) {
+		++e220_uart_tx_done;
+		E220_TxCpltCallback(&lora);
 	}
 }
 
@@ -956,17 +978,17 @@ void Error_Handler(void) {
 }
 #ifdef USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @retval None
- */
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
-	/* USER CODE BEGIN 6 */
+  /* USER CODE BEGIN 6 */
 	/* User can add his own implementation to report the file name and line number,
 	   ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
-	/* USER CODE END 6 */
+  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */

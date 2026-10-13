@@ -1,0 +1,12 @@
+../Core/Src/e220.c:5:12:valid_handle	16	static
+../Core/Src/e220.c:11:12:supported_baud	16	static
+../Core/Src/e220.c:29:19:E220_Init	16	static
+../Core/Src/e220.c:47:26:validate_send	24	static
+../Core/Src/e220.c:62:19:E220_Send	40	static
+../Core/Src/e220.c:79:19:E220_SendString	24	static
+../Core/Src/e220.c:94:19:E220_Send_IT	32	static
+../Core/Src/e220.c:104:6:E220_RxCallback	24	static,ignoring_inline_asm
+../Core/Src/e220.c:135:6:E220_ErrorCallback	16	static
+../Core/Src/e220.c:151:10:E220_Available	24	static
+../Core/Src/e220.c:162:9:E220_ReadByte	24	static,ignoring_inline_asm
+../Core/Src/e220.c:181:10:E220_Read	40	static

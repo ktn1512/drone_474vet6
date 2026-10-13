@@ -2,166 +2,122 @@
 #include <stddef.h>
 #include <string.h>
 
-static int valid_handle(const E220_t *e220)
-{
-    return e220 != NULL && e220->huart != NULL &&
-           e220->huart->Instance != NULL && e220->huart->Init.BaudRate != 0U;
+static int valid_handle(const E220_t *e) {
+    return e != NULL && e->huart != NULL && e->huart->Instance != NULL &&
+           e->huart->Init.BaudRate > 0U;
 }
 
-static int supported_baud(uint32_t baud)
-{
-    switch (baud) {
-    case 1200U:
-    case 2400U:
-    case 4800U:
-    case 9600U:
-    case 19200U:
-    case 38400U:
-    case 57600U:
-    case 115200U:
-        return 1;
-    default:
-        return 0;
-    }
+HAL_StatusTypeDef E220_Init(E220_t *e, UART_HandleTypeDef *uart) {
+    if (e == NULL || uart == NULL || uart->Instance == NULL ||
+        uart->hdmatx == NULL ||
+        uart->Init.BaudRate == 0U ||
+        uart->Init.WordLength != UART_WORDLENGTH_8B ||
+        uart->Init.StopBits != UART_STOPBITS_1 ||
+        uart->Init.Parity != UART_PARITY_NONE ||
+        uart->Init.HwFlowCtl != UART_HWCONTROL_NONE) return HAL_ERROR;
+
+    memset(e, 0, sizeof(*e));
+    e->huart = uart;
+    e->rx_status = HAL_UART_Receive_IT(uart, &e->rx_byte, 1U);
+    return e->rx_status;
 }
 
-HAL_StatusTypeDef E220_Init(E220_t *e220, UART_HandleTypeDef *huart)
-{
-    if (e220 == NULL || huart == NULL || huart->Instance == NULL ||
-        !supported_baud(huart->Init.BaudRate) ||
-        huart->Init.WordLength != UART_WORDLENGTH_8B ||
-        huart->Init.StopBits != UART_STOPBITS_1 ||
-        huart->Init.Parity != UART_PARITY_NONE ||
-        huart->Init.HwFlowCtl != UART_HWCONTROL_NONE) {
-        return HAL_ERROR;
-    }
+HAL_StatusTypeDef E220_Send_DMA(E220_t *e, const uint8_t *data, uint16_t len) {
+    if (!valid_handle(e) || e->huart->hdmatx == NULL || len == 0U ||
+        len > E220_MAX_PACKET_SIZE || data == NULL) return HAL_ERROR;
 
-    memset(e220, 0, sizeof(*e220));
-    e220->huart = huart;
-    e220->rx_status = HAL_UART_Receive_IT(huart, &e220->rx_byte, 1U);
-    return e220->rx_status;
-}
-
-static HAL_StatusTypeDef validate_send(E220_t *e220, const uint8_t *data,
-                                       uint16_t len)
-{
-    if (!valid_handle(e220) || len > E220_MAX_PACKET_SIZE ||
-        (data == NULL && len != 0U)) {
-        return HAL_ERROR;
-    }
-    if (len != 0U && e220->huart->gState != HAL_UART_STATE_READY) {
+    /* Protect the entire DMA buffer until the UART TC callback (NOT merely
+     * until DMA channel has finished copying data to UART TDR). */
+    if (e->tx_active || e->huart->gState != HAL_UART_STATE_READY) {
+        ++e->tx_busy_count;
         return HAL_BUSY;
     }
-    return HAL_OK;
-}
 
-HAL_StatusTypeDef E220_Send(E220_t *e220, const uint8_t *data, uint16_t len)
-{
-    HAL_StatusTypeDef status = validate_send(e220, data, len);
-    if (status != HAL_OK || len == 0U) {
-        return status;
-    }
-
-    /* 8N1 = 10 UART bits/byte. A fixed 100 ms times out above 96 bytes
-     * at 9600 baud; round up the wire time and add a HAL polling margin.
-     */
-    uint32_t baud = e220->huart->Init.BaudRate;
-    uint32_t timeout = ((uint32_t)len * 10000U + baud - 1U) / baud +
-                       E220_UART_TIMEOUT_MARGIN_MS;
-    return HAL_UART_Transmit(e220->huart, data, len, timeout);
-}
-
-HAL_StatusTypeDef E220_SendString(E220_t *e220, const char *str)
-{
-    if (str == NULL) {
-        return HAL_ERROR;
-    }
-
-    uint16_t len = 0U;
-    while (len <= E220_MAX_PACKET_SIZE && str[len] != '\0') {
-        ++len;
-    }
-    return E220_Send(e220, (const uint8_t *)str, len);
-}
-
-HAL_StatusTypeDef E220_Send_IT(E220_t *e220, const uint8_t *data, uint16_t len)
-{
-    HAL_StatusTypeDef status = validate_send(e220, data, len);
-    if (status != HAL_OK || len == 0U) {
-        return status;
-    }
-    return HAL_UART_Transmit_IT(e220->huart, data, len);
-}
-
-void E220_RxCallback(E220_t *e220)
-{
-    if (!valid_handle(e220)) {
-        return;
-    }
-
-    uint16_t head = e220->rx_head;
-    uint16_t next = (uint16_t)((head + 1U) % E220_RX_BUFFER_SIZE);
-    if (next != e220->rx_tail) {
-        e220->rx_buffer[head] = e220->rx_byte;
-        /* Publish the byte before the ISR advances the producer index. */
-        __DMB();
-        e220->rx_head = next;
+    e->tx_active = 1U;
+    memcpy(e->tx_dma_buffer, data, len);
+    HAL_StatusTypeDef rc = HAL_UART_Transmit_DMA(e->huart, e->tx_dma_buffer, len);
+    if (rc == HAL_OK) {
+        ++e->tx_start_count;
     } else {
-        ++e220->rx_overflow_count;
+        e->tx_active = 0U;
+        if (rc == HAL_BUSY) ++e->tx_busy_count;
+        else ++e->tx_error_count;
     }
-    e220->rx_status = HAL_UART_Receive_IT(e220->huart, &e220->rx_byte, 1U);
+    return rc;
 }
 
-void E220_ErrorCallback(E220_t *e220)
-{
-    if (!valid_handle(e220)) {
-        return;
-    }
-
-    ++e220->uart_error_count;
-    /* Abort RX only: clear UART errors and flush stale data, preserving TX. */
-    e220->rx_status = HAL_UART_AbortReceive(e220->huart);
-    if (e220->rx_status == HAL_OK) {
-        e220->rx_status = HAL_UART_Receive_IT(e220->huart, &e220->rx_byte, 1U);
-    }
+HAL_StatusTypeDef E220_SendString_DMA(E220_t *e, const char *str) {
+    if (!str) return HAL_ERROR;
+    size_t n = 0U;
+    while (n <= E220_MAX_PACKET_SIZE && str[n] != '\0') ++n;
+    if (n == 0U || n > E220_MAX_PACKET_SIZE) return HAL_ERROR;
+    return E220_Send_DMA(e, (const uint8_t *)str, (uint16_t)n);
 }
 
-uint16_t E220_Available(E220_t *e220)
-{
-    if (!valid_handle(e220)) {
-        return 0U;
-    }
-    uint16_t head = e220->rx_head;
-    uint16_t tail = e220->rx_tail;
-    return (uint16_t)((head + E220_RX_BUFFER_SIZE - tail) % E220_RX_BUFFER_SIZE);
+/* One DMA-only implementation for ALL sending APIs. */
+HAL_StatusTypeDef E220_Send(E220_t *e, const uint8_t *data, uint16_t n) {
+    return E220_Send_DMA(e, data, n);
+}
+HAL_StatusTypeDef E220_Send_IT(E220_t *e, const uint8_t *data, uint16_t n) {
+    return E220_Send_DMA(e, data, n);
+}
+HAL_StatusTypeDef E220_SendString(E220_t *e, const char *s) {
+    return E220_SendString_DMA(e, s);
 }
 
-uint8_t E220_ReadByte(E220_t *e220)
-{
-    if (!valid_handle(e220)) {
-        return 0U;
+/* Called at the end of physical USART shift-register transmission. */
+void E220_TxCpltCallback(E220_t *e) {
+    if (!valid_handle(e)) return;
+    e->tx_active = 0U;
+    ++e->tx_done_count;
+}
+
+void E220_RxCallback(E220_t *e) {
+    if (!valid_handle(e)) return;
+    ++e->rx_total_count;
+    uint16_t next = (uint16_t)((e->rx_head + 1U) % E220_RX_BUFFER_SIZE);
+    if (next != e->rx_tail) {
+        e->rx_buffer[e->rx_head] = e->rx_byte;
+        __DMB();
+        e->rx_head = next;
+    } else {
+        ++e->rx_overflow_count;
     }
-    uint16_t tail = e220->rx_tail;
-    if (tail == e220->rx_head) {
-        return 0U;
+    e->rx_status = HAL_UART_Receive_IT(e->huart, &e->rx_byte, 1U);
+}
+
+void E220_ErrorCallback(E220_t *e) {
+    if (!valid_handle(e)) return;
+    ++e->uart_error_count;
+    /* TX DMA is managed by the HAL. Do not abort TX merely on an RX error. */
+    if (e->huart->gState == HAL_UART_STATE_READY && e->tx_active) {
+        /* HAL may have stopped an erroneous DMA transfer without calling
+         * TxCplt. Recover the guard only once USART TX is idle. */
+        e->tx_active = 0U;
+        ++e->tx_error_count;
     }
+    e->rx_status = HAL_UART_AbortReceive(e->huart);
+    if (e->rx_status == HAL_OK)
+        e->rx_status = HAL_UART_Receive_IT(e->huart, &e->rx_byte, 1U);
+}
+
+uint16_t E220_Available(E220_t *e) {
+    if (!valid_handle(e)) return 0U;
+    return (uint16_t)((e->rx_head + E220_RX_BUFFER_SIZE - e->rx_tail) % E220_RX_BUFFER_SIZE);
+}
+uint8_t E220_ReadByte(E220_t *e) {
+    if (!valid_handle(e) || e->rx_tail == e->rx_head) return 0U;
+    uint16_t index = e->rx_tail;
     __DMB();
-    uint8_t data = e220->rx_buffer[tail];
-    /* Finish reading before making this slot available to the RX ISR. */
+    uint8_t data = e->rx_buffer[index];
     __DMB();
-    e220->rx_tail = (uint16_t)((tail + 1U) % E220_RX_BUFFER_SIZE);
+    e->rx_tail = (uint16_t)((index + 1U) % E220_RX_BUFFER_SIZE);
     return data;
 }
-
-uint16_t E220_Read(E220_t *e220, uint8_t *buf, uint16_t max_len)
-{
-    if (!valid_handle(e220) || buf == NULL) {
-        return 0U;
-    }
-
-    uint16_t count = 0U;
-    while (count < max_len && E220_Available(e220) != 0U) {
-        buf[count++] = E220_ReadByte(e220);
-    }
-    return count;
+uint16_t E220_Read(E220_t *e, uint8_t *data, uint16_t max_len) {
+    if (data == NULL) return 0U;
+    uint16_t n = 0U;
+    while (n < max_len && E220_Available(e) != 0U)
+        data[n++] = E220_ReadByte(e);
+    return n;
 }

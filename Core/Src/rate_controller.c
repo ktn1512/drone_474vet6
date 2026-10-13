@@ -11,11 +11,11 @@ void RateController_Init(RateController_t *rate)
 {
 	// Gia tri khoi dau de kiem tra tren gia test
 	PID_Init(&rate->roll,
-			 0.5f, 1.4f, 0.0f,
+			 0.4f, 0.005f, 0.0f,
 			 0.0f, 180.0f);
 
 	PID_Init(&rate->pitch,
-			 0.5f, 1.4f, 0.0f,
+			 0.4f, 0.005f, 0.0f,
 			 0.0f, 180.0f);
 
 	PID_Init(&rate->yaw,
