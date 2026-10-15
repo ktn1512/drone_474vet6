@@ -4,6 +4,8 @@
   * @file    stm32g4xx_it.c
   * @brief   Interrupt Service Routines.
   ******************************************************************************
+  * @details Các handler ngoại lệ Cortex-M4 và ngắt ngoại vi của firmware.
+  *            Handler DMA/UART/USB chuyển xử lý cho HAL bằng handle tương ứng.
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -55,10 +57,25 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
+/**
+ * @brief Handle USB FS PCD dùng trong ngắt USB ưu tiên thấp.
+ */
 extern PCD_HandleTypeDef hpcd_USB_FS;
+/**
+ * @brief Handle DMA RX USART2 trên DMA1 Channel1.
+ */
 extern DMA_HandleTypeDef hdma_usart2_rx;
+/**
+ * @brief Handle DMA TX USART2 trên DMA1 Channel2.
+ */
 extern DMA_HandleTypeDef hdma_usart2_tx;
+/**
+ * @brief Handle USART1 dùng để HAL xử lý ngắt UART.
+ */
 extern UART_HandleTypeDef huart1;
+/**
+ * @brief Handle USART2 dùng để HAL xử lý ngắt UART.
+ */
 extern UART_HandleTypeDef huart2;
 /* USER CODE BEGIN EV */
 
@@ -69,6 +86,7 @@ extern UART_HandleTypeDef huart2;
 /******************************************************************************/
 /**
   * @brief This function handles Non maskable interrupt.
+  * @details Xử lý ngắt không che được; implementation hiện tại dừng trong vòng lặp vô hạn.
   */
 void NMI_Handler(void)
 {
@@ -84,6 +102,7 @@ void NMI_Handler(void)
 
 /**
   * @brief This function handles Hard fault interrupt.
+  * @details Xử lý HardFault; implementation hiện tại dừng trong vòng lặp vô hạn.
   */
 void HardFault_Handler(void)
 {
@@ -99,6 +118,7 @@ void HardFault_Handler(void)
 
 /**
   * @brief This function handles Memory management fault.
+  * @details Xử lý lỗi bảo vệ bộ nhớ; implementation hiện tại dừng trong vòng lặp vô hạn.
   */
 void MemManage_Handler(void)
 {
@@ -114,6 +134,7 @@ void MemManage_Handler(void)
 
 /**
   * @brief This function handles Prefetch fault, memory access fault.
+  * @details Xử lý lỗi truy cập bus; implementation hiện tại dừng trong vòng lặp vô hạn.
   */
 void BusFault_Handler(void)
 {
@@ -129,6 +150,7 @@ void BusFault_Handler(void)
 
 /**
   * @brief This function handles Undefined instruction or illegal state.
+  * @details Xử lý lỗi lệnh hoặc trạng thái CPU; hiện dừng trong vòng lặp vô hạn.
   */
 void UsageFault_Handler(void)
 {
@@ -144,6 +166,7 @@ void UsageFault_Handler(void)
 
 /**
   * @brief This function handles System service call via SWI instruction.
+  * @details Điểm xử lý ngoại lệ SVC; thân hàm hiện không thực hiện thao tác nào.
   */
 void SVC_Handler(void)
 {
@@ -157,6 +180,7 @@ void SVC_Handler(void)
 
 /**
   * @brief This function handles Debug monitor.
+  * @details Điểm xử lý ngoại lệ Debug Monitor; thân hàm hiện không thực hiện thao tác nào.
   */
 void DebugMon_Handler(void)
 {
@@ -170,6 +194,7 @@ void DebugMon_Handler(void)
 
 /**
   * @brief This function handles Pendable request for system service.
+  * @details Điểm xử lý ngoại lệ PendSV; thân hàm hiện không thực hiện thao tác nào.
   */
 void PendSV_Handler(void)
 {
@@ -183,6 +208,7 @@ void PendSV_Handler(void)
 
 /**
   * @brief This function handles System tick timer.
+  * @details Xử lý SysTick bằng HAL_IncTick để tăng bộ đếm thời gian HAL.
   */
 void SysTick_Handler(void)
 {
@@ -204,6 +230,7 @@ void SysTick_Handler(void)
 
 /**
   * @brief This function handles DMA1 channel1 global interrupt.
+  * @details Chuyển ngắt DMA1 Channel1 cho HAL xử lý DMA RX của USART2.
   */
 void DMA1_Channel1_IRQHandler(void)
 {
@@ -218,6 +245,7 @@ void DMA1_Channel1_IRQHandler(void)
 
 /**
   * @brief This function handles DMA1 channel2 global interrupt.
+  * @details Chuyển ngắt DMA1 Channel2 cho HAL xử lý DMA TX của USART2.
   */
 void DMA1_Channel2_IRQHandler(void)
 {
@@ -232,6 +260,7 @@ void DMA1_Channel2_IRQHandler(void)
 
 /**
   * @brief This function handles USB low priority interrupt remap.
+  * @details Chuyển ngắt USB ưu tiên thấp cho HAL_PCD_IRQHandler của USB FS.
   */
 void USB_LP_IRQHandler(void)
 {
@@ -246,6 +275,7 @@ void USB_LP_IRQHandler(void)
 
 /**
   * @brief This function handles USART1 global interrupt / USART1 wake-up interrupt through EXTI line 25.
+  * @details Chuyển ngắt USART1 cho HAL_UART_IRQHandler với handle huart1.
   */
 void USART1_IRQHandler(void)
 {
@@ -260,6 +290,7 @@ void USART1_IRQHandler(void)
 
 /**
   * @brief This function handles USART2 global interrupt / USART2 wake-up interrupt through EXTI line 26.
+  * @details Chuyển ngắt USART2 cho HAL_UART_IRQHandler với handle huart2.
   */
 void USART2_IRQHandler(void)
 {

@@ -51,6 +51,8 @@
   *-----------------------------------------------------------------------------
   *=============================================================================
   ******************************************************************************
+  * @details Lớp CMSIS thiết lập FPU/vector lúc khởi động và tính lại HCLK
+  *            từ thanh ghi RCC; tần số được biểu diễn bằng Hz.
   * @attention
   *
   * Copyright (c) 2019 STMicroelectronics.
@@ -78,10 +80,16 @@
 #include "stm32g4xx.h"
 
 #if !defined  (HSE_VALUE)
+  /**
+   * @brief Tần số HSE giả định, Hz; chỉ dùng khi macro chưa được cấu hình bên ngoài.
+   */
   #define HSE_VALUE     24000000U /*!< Value of the External oscillator in Hz */
 #endif /* HSE_VALUE */
 
 #if !defined  (HSI_VALUE)
+  /**
+   * @brief Tần số HSI giả định, Hz; chỉ dùng khi macro chưa được cấu hình bên ngoài.
+   */
   #define HSI_VALUE    16000000U /*!< Value of the Internal oscillator in Hz*/
 #endif /* HSI_VALUE */
 
@@ -114,14 +122,23 @@
      in Sram else user remap will be done in Flash. */
 /* #define VECT_TAB_SRAM */
 #if defined(VECT_TAB_SRAM)
+/**
+ * @brief Địa chỉ nền bảng vector trong SRAM khi bật chọn VECT_TAB_SRAM.
+ */
 #define VECT_TAB_BASE_ADDRESS   SRAM_BASE       /*!< Vector Table base address field.
                                                      This value must be a multiple of 0x200. */
 #else
+/**
+ * @brief Địa chỉ nền bảng vector trong Flash khi không chọn VECT_TAB_SRAM.
+ */
 #define VECT_TAB_BASE_ADDRESS   FLASH_BASE      /*!< Vector Table base address field.
                                                      This value must be a multiple of 0x200. */
 #endif /* VECT_TAB_SRAM */
 
 #if !defined(VECT_TAB_OFFSET)
+/**
+ * @brief Độ dịch bảng vector so với địa chỉ nền, byte; phải căn theo 0x200.
+ */
 #define VECT_TAB_OFFSET         0x00000000U     /*!< Vector Table offset field.
                                                      This value must be a multiple of 0x200. */
 #endif /* VECT_TAB_OFFSET */
@@ -151,9 +168,18 @@
                is no need to call the 2 first functions listed above, since SystemCoreClock
                variable is updated automatically.
   */
+  /**
+   * @brief Tần số HCLK ước tính hiện tại, Hz; giá trị ban đầu lấy từ HSI_VALUE.
+   */
   uint32_t SystemCoreClock = HSI_VALUE;
 
+  /**
+   * @brief Tra mã HPRE thành số bit dịch phải để tính hệ số chia clock AHB.
+   */
   const uint8_t AHBPrescTable[16] = {0U, 0U, 0U, 0U, 0U, 0U, 0U, 0U, 1U, 2U, 3U, 4U, 6U, 7U, 8U, 9U};
+  /**
+   * @brief Tra mã PPRE thành số bit dịch phải để tính hệ số chia clock APB.
+   */
   const uint8_t APBPrescTable[8] =  {0U, 0U, 0U, 0U, 1U, 2U, 3U, 4U};
 
 /**
@@ -176,6 +202,9 @@
   * @brief  Setup the microcontroller system.
   * @param  None
   * @retval None
+  * @details Hàm được startup gọi trước main. Bật quyền truy cập FPU nếu
+  *            build dùng FPU; chỉ đặt SCB->VTOR khi USER_VECT_TAB_ADDRESS được bật.
+  *            Implementation này không tự cấu hình nguồn clock hay PLL.
   */
 
 void SystemInit(void)
@@ -226,9 +255,16 @@ void SystemInit(void)
   *
   * @param  None
   * @retval None
+  * @details Đọc RCC để chọn HSI/HSE/PLL và áp dụng bộ chia AHB, sau đó
+  *            ghi SystemCoreClock theo Hz. Hàm tính từ HSI_VALUE/HSE_VALUE và
+  *            thanh ghi chia/nhân PLL, không đo tần số vật lý thực tế.
   */
 void SystemCoreClockUpdate(void)
 {
+  /**
+   * @brief Các biến tạm tính clock: tmp là số bit dịch AHB; pllvco là tần số
+   *        VCO (Hz); pllr/pllm là hệ số chia; pllsource là mã chọn nguồn PLL.
+   */
   uint32_t tmp, pllvco, pllr, pllsource, pllm;
 
   /* Get SYSCLK source -------------------------------------------------------*/

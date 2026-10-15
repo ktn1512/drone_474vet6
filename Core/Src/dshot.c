@@ -1,3 +1,7 @@
+/**
+ * @file dshot.c
+ * @brief Đóng gói và truyền bốn khung DShot300 bằng các kênh PWM/DMA TIM5.
+ */
 /*
  * dshot.c
  * DShot300 output driver using TIM5 PWM + DMA
@@ -16,27 +20,81 @@
 
 #include "dshot.h"
 
+/**
+ * @brief Handle TIM5 do mã khởi tạo ngoại vi cung cấp, dùng chung cho bốn động cơ.
+ */
 extern TIM_HandleTypeDef htim5;
 
+/**
+ * @brief Số tick của một chu kỳ bit DShot300; giá trị giả định cho cấu hình TIM5.
+ */
 #define DSHOT300_TIMER_TICKS     480U
+/**
+ * @brief Số tick mức cao khi phát bit 0 trong chu kỳ 480 tick.
+ */
 #define DSHOT_BIT_0              180U
+/**
+ * @brief Số tick mức cao khi phát bit 1 trong chu kỳ 480 tick.
+ */
 #define DSHOT_BIT_1              360U
+/**
+ * @brief Số bit dữ liệu của một khung DShot.
+ */
 #define DSHOT_FRAME_WORDS        16U
+/**
+ * @brief Số mẫu compare gửi DMA: 16 bit khung và 2 chu kỳ mức thấp.
+ */
 #define DSHOT_DMA_WORDS          18U
+/**
+ * @brief Số động cơ/kênh PWM theo thiết kế; macro hiện chưa được dùng trong các vòng lặp.
+ */
 #define DSHOT_MOTOR_COUNT        4U
 
+/**
+ * @brief Bộ đệm compare TIM5 kênh 1, đơn vị tick bộ đếm.
+ */
 static uint16_t dma_ch1[DSHOT_DMA_WORDS];
+/**
+ * @brief Bộ đệm compare TIM5 kênh 2, đơn vị tick bộ đếm.
+ */
 static uint16_t dma_ch2[DSHOT_DMA_WORDS];
+/**
+ * @brief Bộ đệm compare TIM5 kênh 3, đơn vị tick bộ đếm.
+ */
 static uint16_t dma_ch3[DSHOT_DMA_WORDS];
+/**
+ * @brief Bộ đệm compare TIM5 kênh 4, đơn vị tick bộ đếm.
+ */
 static uint16_t dma_ch4[DSHOT_DMA_WORDS];
 
+/**
+ * @brief Cờ khung đang truyền DMA; được cập nhật cả trong callback hoàn tất.
+ */
 static volatile uint8_t dshot_dma_busy = 0U;
+/**
+ * @brief Mặt nạ kênh đã hoàn tất: bit 0–3 ứng với kênh 1–4; 0x0F là đủ bốn kênh.
+ */
 static volatile uint8_t dshot_dma_done_mask = 0U;
 
+/**
+ * @brief Đóng gói giá trị DShot, bit telemetry bằng 0 và checksum XOR 4 bit.
+ * @param[in] throttle Giá trị DShot; giá trị lớn hơn 2047 được chặn về 2047.
+ * @return Khung 16 bit gồm 11 bit giá trị, 1 bit telemetry và 4 bit checksum.
+ * @note Hàm giữ nguyên các giá trị 0–47 nếu được truyền trực tiếp vào helper.
+ */
 static uint16_t DSHOT_MakePacket(uint16_t throttle)
 {
+    /**
+     * @brief Phần giá trị và bit telemetry trước khi ghép checksum.
+     */
     uint16_t packet;
+    /**
+     * @brief Bộ tích lũy XOR; sau cùng chỉ giữ 4 bit checksum.
+     */
     uint16_t crc = 0U;
+    /**
+     * @brief Bản sao phần dữ liệu được dịch từng nibble để tính checksum.
+     */
     uint16_t csum_data;
 
     if (throttle > 2047U)
@@ -45,6 +103,9 @@ static uint16_t DSHOT_MakePacket(uint16_t throttle)
     packet = (uint16_t)(throttle << 1);
     csum_data = packet;
 
+    /**
+     * @brief Chỉ số nibble tham gia phép XOR checksum, từ 0 đến 2.
+     */
     for (uint8_t i = 0U; i < 3U; ++i)
     {
         crc ^= csum_data;
@@ -55,8 +116,17 @@ static uint16_t DSHOT_MakePacket(uint16_t throttle)
     return (uint16_t)((packet << 4) | crc);
 }
 
+/**
+ * @brief Chuyển khung DShot thành mẫu compare PWM theo thứ tự bit cao trước.
+ * @param[in] packet Khung DShot 16 bit đã chứa checksum.
+ * @param[out] buffer Bộ đệm hợp lệ có ít nhất DSHOT_DMA_WORDS phần tử uint16_t.
+ * @note Ghi 16 mẫu bit và hai mẫu duty bằng 0 tạo khoảng thấp cuối khung.
+ */
 static void DSHOT_FillBuffer(uint16_t packet, uint16_t *buffer)
 {
+    /**
+     * @brief Chỉ số mẫu bit trong khung, từ 0 đến 15, tương ứng bit 15 đến 0.
+     */
     for (uint8_t i = 0U; i < DSHOT_FRAME_WORDS; ++i)
     {
         buffer[i] = ((packet & (1U << (15U - i))) != 0U)
@@ -69,6 +139,12 @@ static void DSHOT_FillBuffer(uint16_t packet, uint16_t *buffer)
     buffer[17] = 0U;
 }
 
+/**
+ * @brief Ánh xạ lệnh PWM giả lập sang miền giá trị throttle DShot.
+ * @param[in] pwm Độ rộng xung tương đương, µs; được chặn trong 1000–2000 µs.
+ * @return Giá trị nguyên DShot từ 48 đến 2047 theo phép chia nguyên.
+ * @note Không sinh mã dừng 0 hoặc các lệnh đặc biệt 1–47.
+ */
 static uint16_t PWM_To_DShot(uint16_t pwm)
 {
     if (pwm < 1000U)
@@ -79,6 +155,9 @@ static uint16_t PWM_To_DShot(uint16_t pwm)
     return (uint16_t)(48U + (((uint32_t)(pwm - 1000U) * 1999U) / 1000U));
 }
 
+/**
+ * @brief Reset trạng thái truyền rồi khởi động PWM trên bốn kênh TIM5.
+ */
 void DSHOT_Init(void)
 {
     dshot_dma_busy = 0U;
@@ -90,11 +169,26 @@ void DSHOT_Init(void)
     HAL_TIM_PWM_Start(&htim5, TIM_CHANNEL_4);
 }
 
+/**
+ * @brief Chuẩn bị và gửi bốn khung bằng DMA nếu khung trước đã hoàn tất.
+ */
 void DSHOT_Write(uint16_t m1, uint16_t m2, uint16_t m3, uint16_t m4)
 {
+    /**
+     * @brief Khung DShot 16 bit của M1, gồm dữ liệu và checksum.
+     */
     uint16_t p1;
+    /**
+     * @brief Khung DShot 16 bit của M2, gồm dữ liệu và checksum.
+     */
     uint16_t p2;
+    /**
+     * @brief Khung DShot 16 bit của M3, gồm dữ liệu và checksum.
+     */
     uint16_t p3;
+    /**
+     * @brief Khung DShot 16 bit của M4, gồm dữ liệu và checksum.
+     */
     uint16_t p4;
 
     /* Do not overwrite a frame while the previous DMA transfers are active. */
@@ -141,6 +235,12 @@ dma_error:
     dshot_dma_busy = 0U;
 }
 
+/**
+ * @brief Dừng DMA kênh TIM5 đã xong và mở khóa khi đủ bốn kênh hoàn tất.
+ * @param[in,out] htim Handle timer do HAL truyền vào; phải là con trỏ hợp lệ.
+ * @note Bỏ qua timer khác TIM5. Trường Channel chọn bit trong mặt nạ hoàn tất;
+ *       callback được gọi trong luồng xử lý ngắt của HAL.
+ */
 void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim != &htim5)
