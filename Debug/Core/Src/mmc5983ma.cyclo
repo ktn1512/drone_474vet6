@@ -1,6 +1,6 @@
-../Core/Src/mmc5983ma.c:30:26:WriteReg	3
-../Core/Src/mmc5983ma.c:44:26:ReadReg	5
-../Core/Src/mmc5983ma.c:61:9:MMC5983_WhoAmI	2
-../Core/Src/mmc5983ma.c:71:19:MMC5983_Init	8
-../Core/Src/mmc5983ma.c:108:19:MMC5983_ReadRaw	12
-../Core/Src/mmc5983ma.c:166:19:MMC5983_ReadMag	6
+../Core/Src/mmc5983ma.c:99:26:WriteReg	3
+../Core/Src/mmc5983ma.c:121:26:ReadReg	5
+../Core/Src/mmc5983ma.c:142:9:MMC5983_WhoAmI	2
+../Core/Src/mmc5983ma.c:159:19:MMC5983_Init	8
+../Core/Src/mmc5983ma.c:203:19:MMC5983_ReadRaw	12
+../Core/Src/mmc5983ma.c:283:19:MMC5983_ReadMag	6

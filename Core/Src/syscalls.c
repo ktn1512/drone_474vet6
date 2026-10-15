@@ -8,6 +8,8 @@
  *            need which of these lowlevel functions
  *            please consult the Newlib libc-manual
  ******************************************************************************
+ * @details Các hook tối thiểu cho Newlib trên bare-metal. Nhiều lời gọi
+ *           là stub cố định; đọc/ghi ký tự sử dụng __io_getchar/__io_putchar.
  * @attention
  *
  * Copyright (c) 2020-2026 STMicroelectronics.
@@ -32,24 +34,54 @@
 
 
 /* Variables */
+/**
+ * @brief Hook xuất một ký tự do ứng dụng cung cấp.
+ * @param[in] ch Mã ký tự cần xuất.
+ * @return Giá trị theo implementation hook; _write hiện không kiểm tra kết quả.
+ * @note Khai báo weak; cần implementation thực tế khi dùng _write mặc định.
+ */
 extern int __io_putchar(int ch) __attribute__((weak));
+/**
+ * @brief Hook nhận một ký tự do ứng dụng cung cấp.
+ * @return Mã ký tự hoặc mã lỗi theo implementation hook; _read lưu kết quả dạng char.
+ * @note Khai báo weak; cần implementation thực tế khi dùng _read mặc định.
+ */
 extern int __io_getchar(void) __attribute__((weak));
 
 
+/**
+ * @brief Danh sách biến môi trường rỗng, kết thúc bằng con trỏ NULL.
+ */
 char *__env[1] = { 0 };
+/**
+ * @brief Con trỏ môi trường Newlib, ban đầu trỏ tới danh sách rỗng __env.
+ */
 char **environ = __env;
 
 
 /* Functions */
+/**
+ * @brief Hook khởi tạo monitor của runtime; implementation hiện tại để trống.
+ */
 void initialise_monitor_handles()
 {
 }
 
+/**
+ * @brief Trả mã tiến trình giả cho môi trường bare-metal.
+ * @return Luôn trả 1; không có quản lý tiến trình trong implementation này.
+ */
 int _getpid(void)
 {
   return 1;
 }
 
+/**
+ * @brief Stub gửi tín hiệu tiến trình, luôn báo lỗi EINVAL.
+ * @param[in] pid Mã tiến trình theo giao diện syscall; hiện bị bỏ qua.
+ * @param[in] sig Số hiệu tín hiệu theo giao diện syscall; hiện bị bỏ qua.
+ * @return Luôn trả -1 và đặt errno = EINVAL.
+ */
 int _kill(int pid, int sig)
 {
   (void)pid;
@@ -58,15 +90,31 @@ int _kill(int pid, int sig)
   return -1;
 }
 
+/**
+ * @brief Kết thúc chương trình bằng vòng lặp vô hạn.
+ * @param[in] status Mã kết thúc, được chuyển làm pid cho _kill trước khi dừng.
+ * @note Hàm không trở về; _kill trong file này đặt errno = EINVAL.
+ */
 void _exit (int status)
 {
   _kill(status, -1);
   while (1) {}    /* Make sure we hang here */
 }
 
+/**
+ * @brief Nhận len ký tự qua __io_getchar vào bộ đệm, từng ký tự một.
+ * @param[in] file Descriptor tệp theo giao diện Newlib; hiện bị bỏ qua.
+ * @param[out] ptr Bộ đệm hợp lệ có ít nhất len byte.
+ * @param[in] len Số byte yêu cầu nhận; bên gọi cần cung cấp giá trị không âm.
+ * @return Trả nguyên giá trị len; không kiểm tra mã lỗi hoặc EOF từ hook nhận.
+ * @note Hàm weak cho phép ứng dụng thay thế; không kiểm tra NULL hay kích thước bộ đệm.
+ */
 __attribute__((weak)) int _read(int file, char *ptr, int len)
 {
   (void)file;
+  /**
+   * @brief Chỉ số byte đang được đọc/ghi trong bộ đệm, từ 0 đến len - 1.
+   */
   int DataIdx;
 
   for (DataIdx = 0; DataIdx < len; DataIdx++)
@@ -77,9 +125,20 @@ __attribute__((weak)) int _read(int file, char *ptr, int len)
   return len;
 }
 
+/**
+ * @brief Xuất len ký tự qua __io_putchar, từng ký tự một.
+ * @param[in] file Descriptor tệp theo giao diện Newlib; hiện bị bỏ qua.
+ * @param[in] ptr Bộ đệm hợp lệ chứa ít nhất len byte cần xuất.
+ * @param[in] len Số byte yêu cầu xuất; bên gọi cần cung cấp giá trị không âm.
+ * @return Trả nguyên giá trị len; không kiểm tra kết quả của hook xuất.
+ * @note Hàm weak cho phép ứng dụng thay thế; không kiểm tra NULL hay kích thước bộ đệm.
+ */
 __attribute__((weak)) int _write(int file, char *ptr, int len)
 {
   (void)file;
+  /**
+   * @brief Chỉ số byte đang được đọc/ghi trong bộ đệm, từ 0 đến len - 1.
+   */
   int DataIdx;
 
   for (DataIdx = 0; DataIdx < len; DataIdx++)
@@ -89,6 +148,11 @@ __attribute__((weak)) int _write(int file, char *ptr, int len)
   return len;
 }
 
+/**
+ * @brief Stub đóng tệp, hiện luôn báo thất bại.
+ * @param[in] file Descriptor tệp; hiện bị bỏ qua.
+ * @return Luôn trả -1; hàm không đặt errno.
+ */
 int _close(int file)
 {
   (void)file;
@@ -96,6 +160,12 @@ int _close(int file)
 }
 
 
+/**
+ * @brief Gán loại thiết bị ký tự cho descriptor tệp giả.
+ * @param[in] file Descriptor tệp; hiện bị bỏ qua.
+ * @param[in,out] st Con trỏ struct stat hợp lệ; chỉ trường st_mode được ghi S_IFCHR.
+ * @return Luôn trả 0; không điền các trường khác và không kiểm tra NULL.
+ */
 int _fstat(int file, struct stat *st)
 {
   (void)file;
@@ -103,12 +173,24 @@ int _fstat(int file, struct stat *st)
   return 0;
 }
 
+/**
+ * @brief Xem mọi descriptor tệp như thiết bị terminal.
+ * @param[in] file Descriptor tệp; hiện bị bỏ qua.
+ * @return Luôn trả 1.
+ */
 int _isatty(int file)
 {
   (void)file;
   return 1;
 }
 
+/**
+ * @brief Stub dịch vị trí tệp; hiện không thay đổi vị trí nào.
+ * @param[in] file Descriptor tệp; hiện bị bỏ qua.
+ * @param[in] ptr Độ dịch theo giao diện syscall, byte; hiện bị bỏ qua.
+ * @param[in] dir Mốc dịch vị trí theo giao diện syscall; hiện bị bỏ qua.
+ * @return Luôn trả 0.
+ */
 int _lseek(int file, int ptr, int dir)
 {
   (void)file;
@@ -117,6 +199,13 @@ int _lseek(int file, int ptr, int dir)
   return 0;
 }
 
+/**
+ * @brief Stub mở tệp, hiện luôn báo thất bại.
+ * @param[in] path Đường dẫn tệp; hiện bị bỏ qua.
+ * @param[in] flags Cờ mở tệp; hiện bị bỏ qua.
+ * @param[in] ... Các đối số tùy chọn của giao diện mở tệp; hiện không được đọc.
+ * @return Luôn trả -1; hàm không đặt errno.
+ */
 int _open(char *path, int flags, ...)
 {
   (void)path;
@@ -125,6 +214,11 @@ int _open(char *path, int flags, ...)
   return -1;
 }
 
+/**
+ * @brief Stub chờ tiến trình con, luôn báo ECHILD.
+ * @param[out] status Nơi nhận trạng thái theo giao diện syscall; hiện bị bỏ qua, không ghi.
+ * @return Luôn trả -1 và đặt errno = ECHILD.
+ */
 int _wait(int *status)
 {
   (void)status;
@@ -132,6 +226,11 @@ int _wait(int *status)
   return -1;
 }
 
+/**
+ * @brief Stub xóa tên tệp, luôn báo ENOENT.
+ * @param[in] name Tên tệp; hiện bị bỏ qua.
+ * @return Luôn trả -1 và đặt errno = ENOENT.
+ */
 int _unlink(char *name)
 {
   (void)name;
@@ -139,12 +238,23 @@ int _unlink(char *name)
   return -1;
 }
 
+/**
+ * @brief Stub lấy thời gian tiến trình, hiện luôn báo thất bại.
+ * @param[out] buf Nơi nhận thống kê thời gian; hiện bị bỏ qua, không ghi.
+ * @return Luôn trả -1; hàm không đặt errno.
+ */
 int _times(struct tms *buf)
 {
   (void)buf;
   return -1;
 }
 
+/**
+ * @brief Gán loại thiết bị ký tự cho tên tệp giả.
+ * @param[in] file Tên tệp; hiện bị bỏ qua.
+ * @param[in,out] st Con trỏ struct stat hợp lệ; chỉ trường st_mode được ghi S_IFCHR.
+ * @return Luôn trả 0; không điền các trường khác và không kiểm tra NULL.
+ */
 int _stat(char *file, struct stat *st)
 {
   (void)file;
@@ -152,6 +262,12 @@ int _stat(char *file, struct stat *st)
   return 0;
 }
 
+/**
+ * @brief Stub tạo liên kết tệp, luôn báo EMLINK.
+ * @param[in] old Tên tệp nguồn; hiện bị bỏ qua.
+ * @param[in] new Tên liên kết mới; hiện bị bỏ qua.
+ * @return Luôn trả -1 và đặt errno = EMLINK.
+ */
 int _link(char *old, char *new)
 {
   (void)old;
@@ -160,12 +276,23 @@ int _link(char *old, char *new)
   return -1;
 }
 
+/**
+ * @brief Stub tạo tiến trình con, luôn báo EAGAIN.
+ * @return Luôn trả -1 và đặt errno = EAGAIN.
+ */
 int _fork(void)
 {
   errno = EAGAIN;
   return -1;
 }
 
+/**
+ * @brief Stub chạy chương trình khác, luôn báo ENOMEM.
+ * @param[in] name Tên chương trình; hiện bị bỏ qua.
+ * @param[in] argv Danh sách đối số; hiện bị bỏ qua.
+ * @param[in] env Danh sách biến môi trường; hiện bị bỏ qua.
+ * @return Luôn trả -1 và đặt errno = ENOMEM.
+ */
 int _execve(char *name, char **argv, char **env)
 {
   (void)name;

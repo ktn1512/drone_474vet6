@@ -5,6 +5,8 @@
   * @brief        This file provides code for the MSP Initialization
   *               and de-Initialization codes.
   ******************************************************************************
+  * @details Khởi tạo/giải phóng clock, chân GPIO, DMA và NVIC theo từng ngoại vi.
+  *            Các callback MSP được HAL gọi trong quá trình Init/DeInit.
   * @attention
   *
   * Copyright (c) 2026 STMicroelectronics.
@@ -22,8 +24,14 @@
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
+/**
+ * @brief Handle DMA nhận USART2: DMA1 Channel1, chế độ circular, đơn vị truyền byte.
+ */
 extern DMA_HandleTypeDef hdma_usart2_rx;
 
+/**
+ * @brief Handle DMA phát USART2: DMA1 Channel2, chế độ normal, đơn vị truyền byte.
+ */
 extern DMA_HandleTypeDef hdma_usart2_tx;
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,6 +71,8 @@ extern DMA_HandleTypeDef hdma_usart2_tx;
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
                     /**
   * Initializes the Global MSP.
+  * @brief Khởi tạo tài nguyên mức hệ thống dùng chung cho HAL.
+  * @details Bật clock SYSCFG/PWR và tắt pull-up nội của chân UCPD Dead Battery.
   */
 void HAL_MspInit(void)
 {
@@ -90,10 +100,20 @@ void HAL_MspInit(void)
   * This function configures the hardware resources used in this example
   * @param hi2c: I2C handle pointer
   * @retval None
+  * @details hi2c là handle hợp lệ, đọc Instance để chọn I2C1/2/3.
+  *            Chọn clock PCLK1, cấu hình chân SCL/SDA alternate-function open-drain
+  *            không kéo nội rồi bật clock I2C; lỗi cấu hình clock gọi Error_Handler.
+  *            Handle khác ba instance trên không được cấu hình; không kiểm tra NULL.
   */
 void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
 {
+  /**
+   * @brief Cấu hình chân GPIO được tái sử dụng cho các nhóm chân của ngoại vi.
+   */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /**
+   * @brief Cấu hình nguồn clock ngoại vi được gửi cho HAL_RCCEx_PeriphCLKConfig.
+   */
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
   if(hi2c->Instance==I2C1)
   {
@@ -218,6 +238,9 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* hi2c)
   * This function freeze the hardware resources used in this example
   * @param hi2c: I2C handle pointer
   * @retval None
+  * @details hi2c là handle hợp lệ xác định I2C1/2/3 cần giải phóng.
+  *            Tắt clock I2C và trả các chân SCL/SDA về trạng thái GPIO mặc định;
+  *            instance khác không làm gì. Không kiểm tra NULL.
   */
 void HAL_I2C_MspDeInit(I2C_HandleTypeDef* hi2c)
 {
@@ -289,9 +312,15 @@ void HAL_I2C_MspDeInit(I2C_HandleTypeDef* hi2c)
   * This function configures the hardware resources used in this example
   * @param hspi: SPI handle pointer
   * @retval None
+  * @details hspi là handle hợp lệ chọn SPI1/2/3. Bật clock SPI/GPIO và
+  *            cấu hình SCK/MISO/MOSI alternate-function push-pull, không kéo nội.
+  *            Không cấu hình chân chip-select tại đây và không kiểm tra NULL.
   */
 void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
 {
+  /**
+   * @brief Cấu hình chân GPIO được tái sử dụng cho các nhóm chân của ngoại vi.
+   */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   if(hspi->Instance==SPI1)
   {
@@ -376,6 +405,8 @@ void HAL_SPI_MspInit(SPI_HandleTypeDef* hspi)
   * This function freeze the hardware resources used in this example
   * @param hspi: SPI handle pointer
   * @retval None
+  * @details hspi là handle hợp lệ chọn SPI1/2/3. Tắt clock SPI và
+  *            giải phóng các chân SCK/MISO/MOSI; không kiểm tra NULL.
   */
 void HAL_SPI_MspDeInit(SPI_HandleTypeDef* hspi)
 {
@@ -444,6 +475,8 @@ void HAL_SPI_MspDeInit(SPI_HandleTypeDef* hspi)
   * This function configures the hardware resources used in this example
   * @param htim_base: TIM_Base handle pointer
   * @retval None
+  * @details htim_base là handle timer hợp lệ; chỉ bật clock khi Instance là TIM5.
+  *            Hàm không cấu hình các kênh DMA hay chân PWM, không kiểm tra NULL.
   */
 void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
 {
@@ -462,8 +495,17 @@ void HAL_TIM_Base_MspInit(TIM_HandleTypeDef* htim_base)
 
 }
 
+/**
+ * @brief Cấu hình bốn chân đầu ra PWM của TIM5 sau bước khởi tạo timer.
+ * @param[in] htim Handle timer hợp lệ dùng để chọn instance.
+ * @note Với TIM5, PA0/PA1/PA2/PA3 dùng AF2 cho CH1/CH2/CH3/CH4,
+ *       push-pull và không kéo nội. Timer khác không làm gì; không kiểm tra NULL.
+ */
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim)
 {
+  /**
+   * @brief Cấu hình chân GPIO được tái sử dụng cho các nhóm chân của ngoại vi.
+   */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
   if(htim->Instance==TIM5)
   {
@@ -496,6 +538,8 @@ void HAL_TIM_MspPostInit(TIM_HandleTypeDef* htim)
   * This function freeze the hardware resources used in this example
   * @param htim_base: TIM_Base handle pointer
   * @retval None
+  * @details htim_base là handle timer hợp lệ; chỉ tắt clock khi Instance là TIM5.
+  *            Hàm không tự giải phóng chân PWM hay DMA và không kiểm tra NULL.
   */
 void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* htim_base)
 {
@@ -518,10 +562,22 @@ void HAL_TIM_Base_MspDeInit(TIM_HandleTypeDef* htim_base)
   * This function configures the hardware resources used in this example
   * @param huart: UART handle pointer
   * @retval None
+  * @details huart là handle hợp lệ chọn USART1/2/3; USART1 dùng PCLK2,
+  *            USART2/3 dùng PCLK1. Cấu hình TX/RX alternate-function push-pull.
+  *            USART1/2 bật ngắt UART ưu tiên 0. USART2 còn khởi tạo và liên kết
+  *            DMA RX circular trên DMA1 Channel1, TX normal trên DMA1 Channel2;
+  *            mỗi phần tử truyền là một byte. Handle USART2 được cập nhật hdmarx/hdmatx.
+  *            Lỗi cấu hình clock/DMA gọi Error_Handler; không kiểm tra NULL.
   */
 void HAL_UART_MspInit(UART_HandleTypeDef* huart)
 {
+  /**
+   * @brief Cấu hình chân GPIO được tái sử dụng cho các nhóm chân của ngoại vi.
+   */
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /**
+   * @brief Cấu hình nguồn clock ngoại vi được gửi cho HAL_RCCEx_PeriphCLKConfig.
+   */
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
   if(huart->Instance==USART1)
   {
@@ -682,6 +738,10 @@ void HAL_UART_MspInit(UART_HandleTypeDef* huart)
   * This function freeze the hardware resources used in this example
   * @param huart: UART handle pointer
   * @retval None
+  * @details huart là handle hợp lệ chọn USART1/2/3 cần giải phóng.
+  *            Tắt clock UART và giải phóng chân TX/RX; USART1/2 tắt ngắt UART.
+  *            USART2 còn giải phóng DMA qua hdmarx/hdmatx đã liên kết trong Init.
+  *            Không kiểm tra NULL; các handle DMA USART2 phải đã được liên kết.
   */
 void HAL_UART_MspDeInit(UART_HandleTypeDef* huart)
 {

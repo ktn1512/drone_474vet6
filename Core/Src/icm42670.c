@@ -1,3 +1,8 @@
+/**
+ * @file icm42670.c
+ * @brief Thực hiện giao dịch SPI, đọc mẫu và tính gyro bias cho ICM-42670.
+ */
+
 /*
  * icm42670.c
  * ICM-42670-P IMU driver
@@ -6,22 +11,38 @@
 #include "icm42670.h"
 #include <string.h>
 
+/**
+ * @brief Kéo chip-select xuống thấp để bắt đầu giao dịch SPI.
+ */
 static void CS_Low(void)
 {
     HAL_GPIO_WritePin(ICM_CS_PORT, ICM_CS_PIN, GPIO_PIN_RESET);
 }
 
+/**
+ * @brief Đưa chip-select lên cao để kết thúc giao dịch SPI.
+ */
 static void CS_High(void)
 {
     HAL_GPIO_WritePin(ICM_CS_PORT, ICM_CS_PIN, GPIO_PIN_SET);
 }
 
+/**
+ * @brief Đọc một thanh ghi và chuyển kết quả HAL sang mã trạng thái driver.
+ * @see ICM42670_ReadReg trong icm42670.h để biết tham số và kết quả.
+ */
 ICM42670_Status_t ICM42670_ReadReg(uint8_t reg, uint8_t *data)
 {
     if (data == NULL)
         return ICM42670_ERROR;
 
+    /**
+     * @brief Byte địa chỉ SPI có bit 7 đặt để chọn thao tác đọc.
+     */
     uint8_t addr = reg | 0x80U;
+    /**
+     * @brief Kết quả giao dịch SPI gần nhất để xử lý lỗi hoặc timeout.
+     */
     HAL_StatusTypeDef status;
 
     CS_Low();
@@ -38,9 +59,19 @@ ICM42670_Status_t ICM42670_ReadReg(uint8_t reg, uint8_t *data)
     return ICM42670_OK;
 }
 
+/**
+ * @brief Ghi một thanh ghi bằng giao dịch SPI hai byte.
+ * @see ICM42670_WriteReg trong icm42670.h để biết tham số và kết quả.
+ */
 ICM42670_Status_t ICM42670_WriteReg(uint8_t reg, uint8_t data)
 {
+    /**
+     * @brief Hai byte gửi SPI gồm địa chỉ ghi và giá trị thanh ghi.
+     */
     uint8_t buf[2] = { (uint8_t)(reg & 0x7FU), data };
+    /**
+     * @brief Kết quả giao dịch SPI gần nhất để xử lý lỗi hoặc timeout.
+     */
     HAL_StatusTypeDef status;
 
     CS_Low();
@@ -55,12 +86,27 @@ ICM42670_Status_t ICM42670_WriteReg(uint8_t reg, uint8_t data)
     return ICM42670_OK;
 }
 
+/**
+ * @brief Đọc liên tiếp nhiều byte kể từ một thanh ghi qua SPI.
+ * @param[in] reg Địa chỉ thanh ghi bắt đầu, bit đọc được tự thêm.
+ * @param[out] data Bộ đệm chứa ít nhất len byte; không được NULL.
+ * @param[in] len Số byte cần đọc; phải lớn hơn 0.
+ * @retval ICM42670_OK Đã nhận đủ byte theo kết quả HAL.
+ * @retval ICM42670_TIMEOUT Một giao dịch SPI trả về HAL_TIMEOUT.
+ * @retval ICM42670_ERROR Tham số không hợp lệ hoặc lỗi SPI khác.
+ */
 static ICM42670_Status_t ICM42670_ReadBytes(uint8_t reg, uint8_t *data, uint16_t len)
 {
     if ((data == NULL) || (len == 0U))
         return ICM42670_ERROR;
 
+    /**
+     * @brief Byte địa chỉ SPI có bit 7 đặt để chọn thao tác đọc.
+     */
     uint8_t addr = reg | 0x80U;
+    /**
+     * @brief Kết quả giao dịch SPI gần nhất để xử lý lỗi hoặc timeout.
+     */
     HAL_StatusTypeDef status;
 
     CS_Low();
@@ -77,11 +123,21 @@ static ICM42670_Status_t ICM42670_ReadBytes(uint8_t reg, uint8_t *data, uint16_t
     return ICM42670_OK;
 }
 
+/**
+ * @brief Ghép hai byte cao/thấp thành một giá trị 16 bit có dấu.
+ * @param[in] msb Byte cao của mẫu.
+ * @param[in] lsb Byte thấp của mẫu.
+ * @return Giá trị int16_t mang mẫu bit của (msb << 8) | lsb.
+ */
 static int16_t MakeInt16(uint8_t msb, uint8_t lsb)
 {
     return (int16_t)(((uint16_t)msb << 8) | lsb);
 }
 
+/**
+ * @brief Kiểm tra cảm biến và ghi cấu hình gyro/accel mặc định.
+ * @see ICM42670_Init trong icm42670.h để biết tham số và kết quả.
+ */
 ICM42670_Status_t ICM42670_Init(ICM42670_t *dev)
 {
     if (dev == NULL)
@@ -91,7 +147,13 @@ ICM42670_Status_t ICM42670_Init(ICM42670_t *dev)
     CS_High();
     HAL_Delay(10U);
 
+    /**
+     * @brief Byte nhận dạng thiết bị để so với ICM_WHO_AM_I_VALUE.
+     */
     uint8_t who_am_i = 0U;
+    /**
+     * @brief Kết quả của từng thao tác đọc ID/ghi cấu hình khởi tạo.
+     */
     ICM42670_Status_t status = ICM42670_ReadReg(ICM_WHO_AM_I, &who_am_i);
     if (status != ICM42670_OK)
         return status;
@@ -130,12 +192,22 @@ ICM42670_Status_t ICM42670_Init(ICM42670_t *dev)
     return ICM42670_OK;
 }
 
+/**
+ * @brief Đọc và tách mẫu nhiệt độ/accel/gyro thô từ khối thanh ghi.
+ * @see ICM42670_ReadRaw trong icm42670.h để biết tham số và kết quả.
+ */
 ICM42670_Status_t ICM42670_ReadRaw(ICM42670_Data_t *imu)
 {
     if (imu == NULL)
         return ICM42670_ERROR;
 
+    /**
+     * @brief Khối 14 byte: nhiệt độ, accel XYZ và gyro XYZ, mỗi mẫu hai byte.
+     */
     uint8_t buf[14];
+    /**
+     * @brief Kết quả đọc khối raw; chỉ giải mã khi giao dịch thành công.
+     */
     ICM42670_Status_t status = ICM42670_ReadBytes(ICM_TEMP_DATA1, buf, sizeof(buf));
     if (status != ICM42670_OK)
         return status;
@@ -152,11 +224,18 @@ ICM42670_Status_t ICM42670_ReadRaw(ICM42670_Data_t *imu)
     return ICM42670_OK;
 }
 
+/**
+ * @brief Đọc raw và đổi đơn vị; gyro bias chưa được áp dụng ở bước này.
+ * @see ICM42670_ReadAll trong icm42670.h để biết tham số và kết quả.
+ */
 ICM42670_Status_t ICM42670_ReadAll(ICM42670_Data_t *imu)
 {
     if (imu == NULL)
         return ICM42670_ERROR;
 
+    /**
+     * @brief Kết quả đọc mẫu raw trước khi thực hiện đổi đơn vị.
+     */
     ICM42670_Status_t status = ICM42670_ReadRaw(imu);
     if (status != ICM42670_OK)
         return status;
@@ -174,6 +253,10 @@ ICM42670_Status_t ICM42670_ReadAll(ICM42670_Data_t *imu)
     return ICM42670_OK;
 }
 
+/**
+ * @brief Trừ ba gyro bias khỏi dữ liệu vận tốc góc đã đổi đơn vị.
+ * @see ICM42670_ApplyCalibration trong icm42670.h để biết tham số và kết quả.
+ */
 void ICM42670_ApplyCalibration(ICM42670_t *dev, ICM42670_Data_t *imu)
 {
     if ((dev == NULL) || (imu == NULL))
@@ -184,18 +267,40 @@ void ICM42670_ApplyCalibration(ICM42670_t *dev, ICM42670_Data_t *imu)
     imu->gz_dps -= dev->gyro_bias_z_dps;
 }
 
+/**
+ * @brief Lấy trung bình gyro chưa trừ bias để ghi các độ lệch tĩnh.
+ * @see ICM42670_CalibrateGyro trong icm42670.h để biết tham số và kết quả.
+ */
 ICM42670_Status_t ICM42670_CalibrateGyro(ICM42670_t *dev, uint16_t samples, uint16_t sample_delay_ms)
 {
     if ((dev == NULL) || (samples == 0U))
         return ICM42670_ERROR;
 
+    /**
+     * @brief Tổng các mẫu vận tốc góc X, đơn vị độ/giây trước bước chia lấy trung bình.
+     */
     float sum_x = 0.0f;
+    /**
+     * @brief Tổng các mẫu vận tốc góc Y, đơn vị độ/giây trước bước chia lấy trung bình.
+     */
     float sum_y = 0.0f;
+    /**
+     * @brief Tổng các mẫu vận tốc góc Z, đơn vị độ/giây trước bước chia lấy trung bình.
+     */
     float sum_z = 0.0f;
+    /**
+     * @brief Mẫu IMU tạm với gyro chưa trừ bias để tính độ lệch tĩnh.
+     */
     ICM42670_Data_t imu;
 
+    /**
+     * @brief Chỉ số mẫu đã lấy, từ 0 tới samples - 1.
+     */
     for (uint16_t i = 0U; i < samples; ++i)
     {
+        /**
+         * @brief Kết quả đọc mẫu hiện tại; lỗi làm dừng hiệu chuẩn trước khi ghi bias.
+         */
         ICM42670_Status_t status = ICM42670_ReadAll(&imu);
         if (status != ICM42670_OK)
             return status;

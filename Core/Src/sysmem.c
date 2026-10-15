@@ -8,6 +8,8 @@
  *            need which of these lowlevel functions
  *            please consult the newlib libc manual
  ******************************************************************************
+ * @details Quản lý điểm cuối heap cho Newlib bằng các symbol của linker,
+ *           giữ vùng dự trữ stack MSP theo _Min_Stack_Size.
  * @attention
  *
  * Copyright (c) 2026 STMicroelectronics.
@@ -26,6 +28,7 @@
 
 /**
  * Pointer to the current high watermark of the heap usage
+  * @brief Điểm cuối heap hiện tại; NULL cho biết chưa khởi tạo từ symbol _end.
  */
 static uint8_t *__sbrk_heap_end = NULL;
 
@@ -49,14 +52,37 @@ static uint8_t *__sbrk_heap_end = NULL;
  *
  * @param incr Memory size
  * @return Pointer to allocated memory
+  * @details incr là độ thay đổi kích thước heap, đơn vị byte. Khi thành công,
+  *            trả địa chỉ cuối heap trước khi thay đổi và dịch điểm cuối thêm incr.
+  *            Nếu vượt cận trên vùng heap, trả (void *)-1 và đặt errno = ENOMEM.
+  * @note Chỉ kiểm tra cận trên theo vùng stack dự trữ; không kiểm tra cận dưới
+  *       khi incr âm và không có khóa bảo vệ truy cập đồng thời.
  */
 void *_sbrk(ptrdiff_t incr)
 {
+  /**
+   * @brief Symbol linker đánh dấu điểm bắt đầu heap sau các vùng dữ liệu tĩnh.
+   */
   extern uint8_t _end; /* Symbol defined in the linker script */
+  /**
+   * @brief Symbol linker có địa chỉ tại đỉnh stack/vùng cuối RAM.
+   */
   extern uint8_t _estack; /* Symbol defined in the linker script */
+  /**
+   * @brief Symbol linker có giá trị địa chỉ dùng làm kích thước stack MSP dự trữ, byte.
+   */
   extern uint32_t _Min_Stack_Size; /* Symbol defined in the linker script */
+  /**
+   * @brief Địa chỉ đầu vùng stack dự trữ, tính bằng _estack trừ _Min_Stack_Size.
+   */
   const uint32_t stack_limit = (uint32_t)&_estack - (uint32_t)&_Min_Stack_Size;
+  /**
+   * @brief Cận trên địa chỉ heap, ngay trước vùng stack MSP dự trữ.
+   */
   const uint8_t *max_heap = (uint8_t *)stack_limit;
+  /**
+   * @brief Điểm cuối heap cũ trả cho Newlib khi cập nhật thành công.
+   */
   uint8_t *prev_heap_end;
 
   /* Initialize heap end at first call */

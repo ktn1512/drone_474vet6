@@ -1,4 +1,12 @@
+/**
+ * @file index_html.h
+ * @brief Tài nguyên dashboard HTML/CSS/JavaScript nhúng trong flash ESP32.
+ */
 #pragma once
+/**
+ * @brief Trang dashboard tiếng Việt, được HTTP server trả bằng web.send_P().
+ * @details Chuỗi raw chứa toàn bộ giao diện và logic gọi API trạng thái/throttle/PID.
+ */
 static const char INDEX_HTML[] PROGMEM = R"WEB(
 <!doctype html><html lang="vi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">

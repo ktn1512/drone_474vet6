@@ -1,2 +1,2 @@
-../Core/Src/angle_controller.c:10:6:AngleController_Init	1
-../Core/Src/angle_controller.c:21:6:AngleController_Update	1
+../Core/Src/angle_controller.c:17:6:AngleController_Init	1
+../Core/Src/angle_controller.c:31:6:AngleController_Update	1

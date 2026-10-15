@@ -49,9 +49,17 @@ extern "C" {
 
 /* USER CODE END EM */
 
+/**
+ * @brief Cấu hình GPIO alternate-function cho các kênh PWM TIM5.
+ * @param[in] htim Handle timer cần cấu hình chân; implementation xử lý TIM5.
+ */
 void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
 
 /* Exported functions prototypes ---------------------------------------------*/
+/**
+ * @brief Tắt ngắt và dừng chương trình trong vòng lặp vô hạn.
+ * @note Hàm không trả về trong implementation hiện tại.
+ */
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
@@ -59,8 +67,8 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define ICM_CS_Pin GPIO_PIN_4
-#define ICM_CS_GPIO_Port GPIOA
+#define ICM_CS_Pin GPIO_PIN_4 /**< Chân PA4 chọn chip ICM42670 khi trao đổi SPI. */
+#define ICM_CS_GPIO_Port GPIOA /**< Port GPIO của tín hiệu chip-select ICM42670. */
 
 /* USER CODE BEGIN Private defines */
 

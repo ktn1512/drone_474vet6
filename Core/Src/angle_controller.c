@@ -1,3 +1,7 @@
+/**
+ * @file angle_controller.c
+ * @brief Cài đặt vòng điều khiển góc roll/pitch bằng hai bộ PID.
+ */
 /*
  * angle_controller.c
  *
@@ -7,17 +11,23 @@
 
 #include "angle_controller.h"
 
+/**
+ * @brief Khởi tạo PID roll/pitch với các hệ số và giới hạn hiện tại.
+ */
 void AngleController_Init(AngleController_t *angle)
 {
 	PID_Init(&angle->roll,
-			 7.0f, 0.001f, 0.0f,
-			 0.0f, 200.0f);
+			 7.2f, 0.015f, 0.001f,
+			 10.0f, 200.0f);
 
 	PID_Init(&angle->pitch,
-			 7.0f, 0.001f, 0.0f,
-			 0.0f, 200.0f);
+			 7.2f, 0.015f, 0.0f,
+			 10.0f, 200.0f);
 }	
 
+/**
+ * @brief Cập nhật hai PID góc và ghi tốc độ góc đặt vào các đầu ra.
+ */
 void AngleController_Update(AngleController_t *angle,
 
 							float roll_sp_deg, float pitch_sp_deg,
